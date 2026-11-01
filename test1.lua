@@ -1,4 +1,6 @@
 local P = game:GetService("Players")
+local VIM = game:GetService("VirtualInputManager")
+local GuiService = game:GetService("GuiService")
 local pl = P.LocalPlayer
 local pg = pl:WaitForChild("PlayerGui")
 
@@ -11,85 +13,138 @@ g.ResetOnSpawn = false
 g.DisplayOrder = 100
 
 local f = Instance.new("Frame", g)
-f.Size = UDim2.fromOffset(320, 210)
-f.Position = UDim2.new(0.5, -160, 0.2, 0)
+f.Size = UDim2.fromOffset(280, 140)
+f.Position = UDim2.new(0.5, -140, 0.2, 0)
 f.BackgroundColor3 = Color3.fromRGB(30, 35, 48)
 f.Active = true
 f.Draggable = true
 
-local box = Instance.new("TextBox", f)
-box.Size = UDim2.new(1, -10, 0, 160)
-box.Position = UDim2.fromOffset(5, 5)
-box.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
-box.TextColor3 = Color3.new(1, 1, 1)
-box.TextSize = 11
-box.TextWrapped = true
-box.MultiLine = true
-box.TextEditable = false
-box.ClearTextOnFocus = false
-box.TextXAlignment = Enum.TextXAlignment.Left
-box.TextYAlignment = Enum.TextYAlignment.Top
-box.Text = "Click START, open menus, then Ctrl+A & Ctrl+C here"
+local info = Instance.new("TextLabel", f)
+info.Size = UDim2.new(1, -10, 0, 80)
+info.Position = UDim2.fromOffset(5, 5)
+info.BackgroundTransparency = 1
+info.TextColor3 = Color3.new(1, 1, 1)
+info.TextSize = 12
+info.TextWrapped = true
+info.Text = "Stage 1 QA: Waiting to start"
 
 local function btn(t, x, w)
 	local b = Instance.new("TextButton", f)
 	b.Size = UDim2.fromOffset(w, 32)
-	b.Position = UDim2.fromOffset(x, 172)
+	b.Position = UDim2.fromOffset(x, 96)
 	b.Text = t
 	b.TextSize = 14
 	return b
 end
 
-local start = btn("START", 5, 150)
-local close = btn("CLOSE", 165, 150)
+local start = btn("START", 5, 130)
+local close = btn("CLOSE", 145, 130)
 
 local active = false
 local alive = true
-local seen = {}
-local logs = {}
+local busy = false
+local ACTION_DELAY = 1.5
 
-local targets = {
-	"DUNGEON COMPLETED", "PAY WITH GEMS", "1.60",
-	"OPEN PARTIES", "CREATE PARTY", "YOUR PARTY", "START"
-}
+local function log(msg)
+	print("[QA-Stage1] " .. msg)
+	info.Text = msg
+end
 
-local function scan()
-	local added = false
-	for _, d in ipairs(pg:GetDescendants()) do
-		if not d:IsDescendantOf(g) and (d:IsA("TextLabel") or d:IsA("TextButton")) then
-			local txt = string.upper(d.Text or "")
-			for _, m in ipairs(targets) do
-				if string.find(txt, m, 1, true) then
-					local p = d:GetFullName()
-					if not seen[p] then
-						seen[p] = true
-						added = true
-						table.insert(logs, "[" .. d.ClassName .. "] " .. d.Text .. " -> " .. p)
-						local par = d.Parent and d.Parent.Parent or d.Parent
-						if par then
-							for _, sub in ipairs(par:GetDescendants()) do
-								if sub:IsA("GuiButton") then
-									table.insert(logs, "  BTN: " .. sub:GetFullName())
-								end
-							end
-						end
-					end
+-- Checks if a GuiObject and all its ancestors up to PlayerGui are visible/enabled
+local function isVisible(obj)
+	if not obj or not obj:IsDescendantOf(pg) then return false end
+	local cur = obj
+	while cur and cur ~= pg do
+		if cur.Name == "__Disable" then return false end
+		if cur:IsA("GuiObject") and not cur.Visible then return false end
+		if cur:IsA("LayerCollector") and not cur.Enabled then return false end
+		cur = cur.Parent
+	end
+	return obj.AbsoluteSize.X > 0 and obj.AbsoluteSize.Y > 0
+end
+
+-- Safely triggers the UI button using available click methods
+local function clickButton(b)
+	if typeof(firesignal) == "function" then
+		pcall(function() firesignal(b.Activated) end)
+		pcall(function() firesignal(b.MouseButton1Click) end)
+	else
+		local inset = GuiService:GetGuiInset()
+		local cx = b.AbsolutePosition.X + (b.AbsoluteSize.X / 2)
+		local cy = b.AbsolutePosition.Y + (b.AbsoluteSize.Y / 2) + inset.Y
+		VIM:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+		task.wait(0.05)
+		VIM:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
+	end
+end
+
+-- Locates PlayerGui.Menus.UI_Party...pa_cols
+local function getPaCols()
+	local menus = pg:FindFirstChild("Menus")
+	local uiParty = menus and menus:FindFirstChild("UI_Party")
+	local root = uiParty and uiParty:FindFirstChild("Root")
+	local fit = root and root:FindFirstChild("NUI_Fit")
+	local win = fit and fit:FindFirstChild("window")
+	local win3d = win and win:FindFirstChild("win_3d")
+	local body = win3d and win3d:FindFirstChild("win_body")
+	local pane = body and body:FindFirstChild("pane_body")
+	return pane and pane:FindFirstChild("pa_cols")
+end
+
+local function stepStage1()
+	if busy then return end
+	busy = true
+
+	local paCols = getPaCols()
+	local completed = paCols and paCols:FindFirstChild("completed")
+	local listPane = paCols and paCols:FindFirstChild("list")
+
+	if isVisible(listPane) then
+		log("Stage 1 Success!\n'OPEN PARTIES' screen is now open.")
+		busy = false
+		return
+	end
+
+	if completed and isVisible(completed) then
+		local opts = completed:FindFirstChild("pa_opts")
+		local gemsBtn = nil
+
+		if opts then
+			for _, opt in ipairs(opts:GetChildren()) do
+				local head = opt:FindFirstChild("NUI_Head", true)
+				if head and head:IsA("TextLabel") and string.find(string.upper(head.Text), "PAY WITH GEMS", 1, true) then
+					gemsBtn = opt:FindFirstChild("price_btn", true)
 					break
 				end
 			end
 		end
+
+		if gemsBtn and isVisible(gemsBtn) then
+			log("Found 'PAY WITH GEMS' button.\nWaiting " .. ACTION_DELAY .. "s before clicking...")
+			task.wait(ACTION_DELAY)
+			if active and isVisible(gemsBtn) then
+				log("Clicking 'PAY WITH GEMS' (" .. gemsBtn:GetFullName() .. ")")
+				clickButton(gemsBtn)
+				task.wait(ACTION_DELAY)
+			end
+		else
+			log("Completed screen visible, waiting for Gems button...")
+		end
+	else
+		log("Waiting for Dungeon Completed screen...")
 	end
-	if added then
-		box.Text = table.concat(logs, "\n")
-	end
+
+	busy = false
 end
 
 start.MouseButton1Click:Connect(function()
 	active = not active
 	start.Text = active and "STOP" or "START"
 	if active then
-		box.Text = "Scanning..."
-		scan()
+		log("Stage 1 Automation Started")
+		task.spawn(stepStage1)
+	else
+		log("Stage 1 Paused")
 	end
 end)
 
@@ -101,7 +156,9 @@ end)
 
 task.spawn(function()
 	while alive and g.Parent do
-		task.wait(2)
-		if alive and active then scan() end
+		task.wait(1)
+		if alive and active and not busy then
+			stepStage1()
+		end
 	end
 end)
