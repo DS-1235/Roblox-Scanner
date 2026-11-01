@@ -8,11 +8,10 @@ local pg = pl:WaitForChild("PlayerGui")
 -- -------------------------------------------------------------
 -- Configuration
 -- -------------------------------------------------------------
-local ACTION_DELAY = 1.2          -- Settle delay for UI animations/tweens
-local AUTO_START_STAGE_3 = false  -- Set to true if you want it to also click 'START' on the Your Party screen
+local ACTION_DELAY = 1.2  -- Settle delay for UI tween/slide animations
 
 -- -------------------------------------------------------------
--- Clean up any existing UI instance
+-- Clean up existing UI if re-running
 -- -------------------------------------------------------------
 local old = pg:FindFirstChild("NS")
 if old then old:Destroy() end
@@ -38,7 +37,7 @@ info.BackgroundTransparency = 1
 info.TextColor3 = Color3.new(1, 1, 1)
 info.TextSize = 12
 info.TextWrapped = true
-info.Text = "QA Automation: Ready (Stages 1 & 2)\nClick START when ready."
+info.Text = "QA Automation: Stages 1, 2 & 3 Ready\nClick START to begin."
 
 local function btn(t, x, w)
     local b = Instance.new("TextButton", f)
@@ -59,7 +58,7 @@ local active = false
 local alive = true
 local busy = false
 
--- Safe logging function (handles non-strings and uses proper '..' concatenation)
+-- Safe logging helper
 local function log(msg)
     local text = tostring(msg)
     print("[QA-Automation] " .. text)
@@ -68,7 +67,7 @@ local function log(msg)
     end
 end
 
--- Checks if a GuiObject and all its ancestors up to PlayerGui are visible/enabled
+-- Checks if a GuiObject and all its ancestors are visible
 local function isVisible(obj)
     if not obj or not obj:IsDescendantOf(pg) then return false end
     local cur = obj
@@ -87,6 +86,11 @@ local function clickButton(b)
     if typeof(firesignal) == "function" then
         pcall(function() firesignal(b.Activated) end)
         pcall(function() firesignal(b.MouseButton1Click) end)
+        for _, child in ipairs(b:GetChildren()) do
+            if child:IsA("GuiButton") or child:IsA("TextLabel") then
+                pcall(function() firesignal(child.Activated) end)
+            end
+        end
     else
         local inset = GuiService:GetGuiInset()
         local cx = b.AbsolutePosition.X + (b.AbsoluteSize.X / 2)
@@ -97,7 +101,7 @@ local function clickButton(b)
     end
 end
 
--- Reliably finds pa_cols regardless of whether NUI_Fit or window wrapper is used
+-- Finds pa_cols regardless of container layout variations
 local function getPaCols()
     local menus = pg:FindFirstChild("Menus")
     local uiParty = menus and menus:FindFirstChild("UI_Party")
@@ -105,7 +109,7 @@ local function getPaCols()
     return uiParty:FindFirstChild("pa_cols", true)
 end
 
--- Helper to find a button by text or child pb_text
+-- Helper to find a button by matching text label or descendant pb_text
 local function findButtonWithText(container, matchText)
     if not container then return nil end
     local upperMatch = string.upper(matchText)
@@ -123,26 +127,27 @@ local function findButtonWithText(container, matchText)
     return nil
 end
 
--- Main automation tick
+-- Main automation loop
 local function runAutomationLoop()
     if busy or not active then return end
     busy = true
 
-    -- Guarded inside pcall so unexpected hierarchy states never leave busy = true
+    -- Guarded inside pcall to guarantee busy resets even if state changes unexpectedly
     local ok, err = pcall(function()
         local paCols = getPaCols()
         if not paCols then
-            log("Waiting for Party UI (pa_cols)...")
+            log("Waiting for Party UI container...")
             return
         end
 
         local completed = paCols:FindFirstChild("completed")
         local listPane = paCols:FindFirstChild("list")
-        local leaderPane = paCols:FindFirstChild("leader")
+        -- Supports both standard dungeon leader and wave/endless mode
+        local leaderPane = paCols:FindFirstChild("leader") or paCols:FindFirstChild("wave")
 
-        -- ---------------------------------------------------------
+        -- -------------------------------------------------------------
         -- STAGE 1: Dungeon Completed Screen -> Click "PAY WITH GEMS"
-        -- ---------------------------------------------------------
+        -- -------------------------------------------------------------
         if completed and isVisible(completed) then
             local opts = completed:FindFirstChild("pa_opts", true)
             local gemsBtn = nil
@@ -166,19 +171,18 @@ local function runAutomationLoop()
                     task.wait(ACTION_DELAY)
                 end
             else
-                log("Stage 1: Completed screen visible, locating Gems button...")
+                log("Stage 1: Completed screen active, locating Gems button...")
             end
             return
         end
 
-        -- ---------------------------------------------------------
+        -- -------------------------------------------------------------
         -- STAGE 2: Open Parties Screen -> Click "CREATE PARTY"
-        -- ---------------------------------------------------------
+        -- -------------------------------------------------------------
         if listPane and isVisible(listPane) then
             local foot = listPane:FindFirstChild("pa_foot", true)
             local createBtn = foot and foot:FindFirstChild("btn", true)
 
-            -- Fallback: locate by matching 'CREATE PARTY' text
             if not createBtn or not isVisible(createBtn) then
                 createBtn = findButtonWithText(listPane, "CREATE PARTY")
             end
@@ -192,42 +196,49 @@ local function runAutomationLoop()
                     task.wait(ACTION_DELAY)
                 end
             else
-                log("Stage 2: Open Parties visible, locating CREATE PARTY button...")
+                log("Stage 2: Open Parties active, locating CREATE PARTY button...")
             end
             return
         end
 
-        -- ---------------------------------------------------------
-        -- STAGE 3 (or verification): Your Party / Leader Screen
-        -- ---------------------------------------------------------
+        -- -------------------------------------------------------------
+        -- STAGE 3: Your Party Screen -> Click "START"
+        -- -------------------------------------------------------------
         if leaderPane and isVisible(leaderPane) then
-            if AUTO_START_STAGE_3 then
-                local paStart = leaderPane:FindFirstChild("pa_start", true)
-                local paGo = paStart and paStart:FindFirstChild("pa_go", true)
-                local startBtn = paGo and paGo:FindFirstChild("btn", true)
+            local paStart = leaderPane:FindFirstChild("pa_start", true)
+            local paGo = paStart and paStart:FindFirstChild("pa_go", true)
+            local startBtn = paGo and paGo:FindFirstChild("btn", true)
 
-                if not startBtn or not isVisible(startBtn) then
-                    startBtn = findButtonWithText(leaderPane, "START")
+            -- Fallback 1: locate by matching 'START' text inside leader pane
+            if not startBtn or not isVisible(startBtn) then
+                startBtn = findButtonWithText(leaderPane, "START")
+            end
+
+            -- Fallback 2: look for Root.NUI_Looks.leader_go (from screen scan)
+            if not startBtn or not isVisible(startBtn) then
+                local menus = pg:FindFirstChild("Menus")
+                local uiParty = menus and menus:FindFirstChild("UI_Party")
+                if uiParty then
+                    startBtn = uiParty:FindFirstChild("leader_go", true)
                 end
+            end
 
-                if startBtn and isVisible(startBtn) then
-                    log("Stage 3: Found 'START' button.\nWaiting " .. ACTION_DELAY .. "s to settle...")
+            if startBtn and isVisible(startBtn) then
+                log("Stage 3: Found 'START' button.\nWaiting " .. ACTION_DELAY .. "s to settle...")
+                task.wait(ACTION_DELAY)
+                if active and isVisible(startBtn) then
+                    log("Stage 3: Clicking 'START' to begin dungeon...")
+                    clickButton(startBtn)
                     task.wait(ACTION_DELAY)
-                    if active and isVisible(startBtn) then
-                        log("Stage 3: Clicking 'START'...")
-                        clickButton(startBtn)
-                        task.wait(ACTION_DELAY)
-                    end
-                else
-                    log("Stage 3: Your Party screen active, locating START button...")
+                    log("Dungeon launched! Waiting for next completion...")
                 end
             else
-                log("Success: Landed on 'YOUR PARTY' screen!\nStages 1 & 2 completed.")
+                log("Stage 3: Your Party active, locating START button...")
             end
             return
         end
 
-        log("Waiting for Dungeon Completion or Party screen...")
+        log("Waiting for Dungeon Completion or Party screens...")
     end)
 
     if not ok then
@@ -245,7 +256,7 @@ start.MouseButton1Click:Connect(function()
     active = not active
     start.Text = active and "STOP" or "START"
     if active then
-        log("Automation started (Stages 1 & 2)")
+        log("Automation started (Stages 1, 2 & 3)")
         task.spawn(runAutomationLoop)
     else
         log("Automation paused")
