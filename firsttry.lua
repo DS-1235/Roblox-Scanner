@@ -137,10 +137,10 @@ closeButton.MouseButton1Click:Connect(function()
 	gui:Destroy()
 end)
 
--- Background Loop (Runs every 4 seconds when active)
+-- Background Loop (Runs every 1 second when active)
 task.spawn(function()
 	while alive and gui.Parent do
-		task.wait(4)
+		task.wait(1)
 		if alive and active then
 			scanAndTeleport()
 		end
