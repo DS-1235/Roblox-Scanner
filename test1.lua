@@ -26,7 +26,7 @@ info.BackgroundTransparency = 1
 info.TextColor3 = Color3.new(1, 1, 1)
 info.TextSize = 12
 info.TextWrapped = true
-info.Text = "Stage 1 QA: Waiting to start"
+info.Text = "QA Automation: Ready (Stages 1 & 2)"
 
 local function btn(t, x, w)
 	local b = Instance.new("TextButton", f)
@@ -43,14 +43,13 @@ local close = btn("CLOSE", 145, 130)
 local active = false
 local alive = true
 local busy = false
-local ACTION_DELAY = 1.5
+local ACTION_DELAY = 1.2
 
 local function log(msg)
-	print("[QA-Stage1] " .. msg)
+	print("[QA-Automation] " + msg)
 	info.Text = msg
 end
 
--- Checks if a GuiObject and all its ancestors up to PlayerGui are visible/enabled
 local function isVisible(obj)
 	if not obj or not obj:IsDescendantOf(pg) then return false end
 	local cur = obj
@@ -63,7 +62,6 @@ local function isVisible(obj)
 	return obj.AbsoluteSize.X > 0 and obj.AbsoluteSize.Y > 0
 end
 
--- Safely triggers the UI button using available click methods
 local function clickButton(b)
 	if typeof(firesignal) == "function" then
 		pcall(function() firesignal(b.Activated) end)
@@ -78,7 +76,6 @@ local function clickButton(b)
 	end
 end
 
--- Locates PlayerGui.Menus.UI_Party...pa_cols
 local function getPaCols()
 	local menus = pg:FindFirstChild("Menus")
 	local uiParty = menus and menus:FindFirstChild("UI_Party")
@@ -91,21 +88,43 @@ local function getPaCols()
 	return pane and pane:FindFirstChild("pa_cols")
 end
 
-local function stepStage1()
+local function runAutomationLoop()
 	if busy then return end
 	busy = true
 
 	local paCols = getPaCols()
-	local completed = paCols and paCols:FindFirstChild("completed")
-	local listPane = paCols and paCols:FindFirstChild("list")
-
-	if isVisible(listPane) then
-		log("Stage 1 Success!\n'OPEN PARTIES' screen is now open.")
+	if not paCols then
+		log("Waiting for Party UI container...")
 		busy = false
 		return
 	end
 
-	if completed and isVisible(completed) then
+	local completed = paCols:FindFirstChild("completed")
+	local listPane = paCols:FindFirstChild("list")
+	local leaderPane = paCols:FindFirstChild("leader")
+
+	-- Stage 3 Check (In case we are already on leader/party screen)
+	if leaderPane and isVisible(leaderPane) then
+		log("Stage 2 already passed! 'YOUR PARTY' screen is active.")
+		busy = false
+		return
+	end
+
+	-- Stage 2 Check: Open Parties screen is visible
+	if listPane and isVisible(listPane) then
+		local foot = listPane:FindFirstChild("pa_foot")
+		local createBtn = foot and foot:FindFirstChild("btn")
+
+		if createBtn and isVisible(createBtn) then
+			log("Found 'CREATE PARTY' button. Clicking...")
+			clickButton(createBtn)
+			task.wait(ACTION_DELAY)
+		else
+			log("Open Parties visible, looking for Create Party button...")
+		end
+
+	-- Stage 1 Check: Dungeon Completed screen is visible
+	elseif completed and isVisible(completed) then
 		local opts = completed:FindFirstChild("pa_opts")
 		local gemsBtn = nil
 
@@ -120,18 +139,14 @@ local function stepStage1()
 		end
 
 		if gemsBtn and isVisible(gemsBtn) then
-			log("Found 'PAY WITH GEMS' button.\nWaiting " .. ACTION_DELAY .. "s before clicking...")
+			log("Clicking 'PAY WITH GEMS'...")
+			clickButton(gemsBtn)
 			task.wait(ACTION_DELAY)
-			if active and isVisible(gemsBtn) then
-				log("Clicking 'PAY WITH GEMS' (" .. gemsBtn:GetFullName() .. ")")
-				clickButton(gemsBtn)
-				task.wait(ACTION_DELAY)
-			end
 		else
-			log("Completed screen visible, waiting for Gems button...")
+			log("Completed screen active, locating Gems button...")
 		end
 	else
-		log("Waiting for Dungeon Completed screen...")
+		log("Waiting for dungeon completion screen...")
 	end
 
 	busy = false
@@ -141,10 +156,10 @@ start.MouseButton1Click:Connect(function()
 	active = not active
 	start.Text = active and "STOP" or "START"
 	if active then
-		log("Stage 1 Automation Started")
-		task.spawn(stepStage1)
+		log("Automation started (Stage 1 & 2)")
+		task.spawn(runAutomationLoop)
 	else
-		log("Stage 1 Paused")
+		log("Automation paused")
 	end
 end)
 
@@ -158,7 +173,7 @@ task.spawn(function()
 	while alive and g.Parent do
 		task.wait(1)
 		if alive and active and not busy then
-			stepStage1()
+			runAutomationLoop()
 		end
 	end
 end)
