@@ -6,6 +6,12 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- -------------------------------------------------------------
+-- Speed & Interval Configuration
+-- -------------------------------------------------------------
+local DUNGEON_INTERVAL = 0.6  -- Reduced from 1.2s to 0.6s (action & settle delay)
+local COMBAT_INTERVAL  = 0.5  -- Reduced from 1.0s to 0.5s (teleport scan interval)
+
+-- -------------------------------------------------------------
 -- Clean up existing Master UI
 -- -------------------------------------------------------------
 local oldGui = playerGui:FindFirstChild("NS_MasterAutomation")
@@ -76,7 +82,7 @@ dungeonTitle.TextColor3 = Color3.fromRGB(130, 200, 255)
 dungeonTitle.TextSize = 12
 dungeonTitle.Font = Enum.Font.SourceSansBold
 dungeonTitle.TextXAlignment = Enum.TextXAlignment.Left
-dungeonTitle.Text = "Dungeon Loop (Stages 1-3)"
+dungeonTitle.Text = "Dungeon Loop (0.6s Delay)"
 
 local dungeonToggle = Instance.new("TextButton", dungeonBox)
 dungeonToggle.Size = UDim2.fromOffset(72, 22)
@@ -116,7 +122,7 @@ combatTitle.TextColor3 = Color3.fromRGB(255, 150, 130)
 combatTitle.TextSize = 12
 combatTitle.Font = Enum.Font.SourceSansBold
 combatTitle.TextXAlignment = Enum.TextXAlignment.Left
-combatTitle.Text = "Combat / Enemy Scanner"
+combatTitle.Text = "Combat Scanner (0.5s Interval)"
 
 local combatToggle = Instance.new("TextButton", combatBox)
 combatToggle.Size = UDim2.fromOffset(72, 22)
@@ -146,7 +152,6 @@ local alive = true
 local dungeonActive = false
 local combatActive = false
 local dungeonBusy = false
-local ACTION_DELAY = 1.2
 
 -- -------------------------------------------------------------
 -- Shared Helpers
@@ -178,7 +183,7 @@ local function clickButton(b)
         local cx = b.AbsolutePosition.X + (b.AbsoluteSize.X / 2)
         local cy = b.AbsolutePosition.Y + (b.AbsoluteSize.Y / 2) + inset.Y
         VIM:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
-        task.wait(0.05)
+        task.wait(0.04)
         VIM:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
     end
 end
@@ -206,7 +211,6 @@ local function findButtonWithText(container, matchText)
     return nil
 end
 
--- Safely resolves enemies folder without synchronous hang
 local function getEnemiesFolder()
     local main = workspace:FindFirstChild("__Main")
     local enemies = main and main:FindFirstChild("__Enemies")
@@ -214,7 +218,7 @@ local function getEnemiesFolder()
 end
 
 -- -------------------------------------------------------------
--- Module 1: Dungeon Automation Step
+-- Module 1: Dungeon Automation Step (0.6s delay)
 -- -------------------------------------------------------------
 local function stepDungeon()
     if dungeonBusy or not dungeonActive then return end
@@ -246,12 +250,12 @@ local function stepDungeon()
             end
 
             if gemsBtn and isVisible(gemsBtn) then
-                dungeonStatus.Text = "Stage 1: Found 'PAY WITH GEMS'\nWaiting to settle..."
-                task.wait(ACTION_DELAY)
+                dungeonStatus.Text = "Stage 1: Found 'PAY WITH GEMS'\nSettling (" .. DUNGEON_INTERVAL .. "s)..."
+                task.wait(DUNGEON_INTERVAL)
                 if dungeonActive and isVisible(gemsBtn) then
                     dungeonStatus.Text = "Stage 1: Clicking 'PAY WITH GEMS'..."
                     clickButton(gemsBtn)
-                    task.wait(ACTION_DELAY)
+                    task.wait(DUNGEON_INTERVAL)
                 end
             else
                 dungeonStatus.Text = "Stage 1: Completed screen visible, locating Gems button..."
@@ -268,12 +272,12 @@ local function stepDungeon()
             end
 
             if createBtn and isVisible(createBtn) then
-                dungeonStatus.Text = "Stage 2: Found 'CREATE PARTY'\nWaiting to settle..."
-                task.wait(ACTION_DELAY)
+                dungeonStatus.Text = "Stage 2: Found 'CREATE PARTY'\nSettling (" .. DUNGEON_INTERVAL .. "s)..."
+                task.wait(DUNGEON_INTERVAL)
                 if dungeonActive and isVisible(createBtn) then
                     dungeonStatus.Text = "Stage 2: Clicking 'CREATE PARTY'..."
                     clickButton(createBtn)
-                    task.wait(ACTION_DELAY)
+                    task.wait(DUNGEON_INTERVAL)
                 end
             else
                 dungeonStatus.Text = "Stage 2: Open Parties active, finding Create Party button..."
@@ -300,12 +304,12 @@ local function stepDungeon()
             end
 
             if startBtn and isVisible(startBtn) then
-                dungeonStatus.Text = "Stage 3: Found 'START' button\nWaiting to settle..."
-                task.wait(ACTION_DELAY)
+                dungeonStatus.Text = "Stage 3: Found 'START'\nSettling (" .. DUNGEON_INTERVAL .. "s)..."
+                task.wait(DUNGEON_INTERVAL)
                 if dungeonActive and isVisible(startBtn) then
                     dungeonStatus.Text = "Stage 3: Clicking 'START'..."
                     clickButton(startBtn)
-                    task.wait(ACTION_DELAY)
+                    task.wait(DUNGEON_INTERVAL)
                     dungeonStatus.Text = "Dungeon launched!\nWaiting for next completion..."
                 end
             else
@@ -321,7 +325,7 @@ local function stepDungeon()
 end
 
 -- -------------------------------------------------------------
--- Module 2: Combat Teleport Step
+-- Module 2: Combat Teleport Step (0.5s interval)
 -- -------------------------------------------------------------
 local function stepCombat()
     if not combatActive then return end
@@ -421,11 +425,11 @@ closeBtn.MouseButton1Click:Connect(function()
 end)
 
 -- -------------------------------------------------------------
--- Background Automation Loops
+-- Background Automation Loops (Updated Frequencies)
 -- -------------------------------------------------------------
 task.spawn(function()
     while alive and gui.Parent do
-        task.wait(1)
+        task.wait(DUNGEON_INTERVAL) -- Checks menu transitions every 0.6 seconds
         if alive and dungeonActive and not dungeonBusy then
             stepDungeon()
         end
@@ -434,7 +438,7 @@ end)
 
 task.spawn(function()
     while alive and gui.Parent do
-        task.wait(1)
+        task.wait(COMBAT_INTERVAL) -- Scans and teleports every 0.5 seconds
         if alive and combatActive then
             stepCombat()
         end
