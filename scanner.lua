@@ -42,19 +42,22 @@ infoLabel.BackgroundTransparency = 1
 infoLabel.TextColor3 = Color3.new(1, 1, 1)
 infoLabel.TextSize = 13
 infoLabel.TextWrapped = true
-infoLabel.Text = "Nearest candidate: Waiting"
+infoLabel.Text = "Status: Waiting to start"
 infoLabel.Parent = frame
 
 -- Buttons
 local startButton = createButton("START", 5, 120)
 local closeButton = createButton("CLOSE", 135, 120)
 
--- State Variables
+-- State Variables & Settings
 local active = false
 local alive = true
+local teleportCount = 0
+local STEP_DISTANCE = 300
+local INTERVAL = 2
 
--- Combined Scan & Teleport Function
-local function scanAndTeleport()
+-- Forward Teleport Function
+local function teleportForward()
 	local character = player.Character
 	local myRoot = character and character:FindFirstChild("HumanoidRootPart")
 	if not myRoot then
@@ -62,54 +65,23 @@ local function scanAndTeleport()
 		return
 	end
 
-	local nearestRoot = nil
-	local nearestDistance = math.huge
-	local nearestModel = nil
+	-- Calculate position 300 studs forward while keeping current rotation
+	local newCFrame = myRoot.CFrame + (myRoot.CFrame.LookVector * STEP_DISTANCE)
+	character:PivotTo(newCFrame)
 
-	for _, model in ipairs(workspace:GetDescendants()) do
-		if model:IsA("Model")
-			and model ~= character
-			and not Players:GetPlayerFromCharacter(model) then
+	teleportCount += 1
+	local pos = newCFrame.Position
 
-			local root = model:FindFirstChild("HumanoidRootPart", true)
-
-			if root and root:IsA("BasePart") then
-				local distance = (myRoot.Position - root.Position).Magnitude
-
-				if distance < nearestDistance then
-					nearestDistance = distance
-					nearestRoot = root
-					nearestModel = model
-				end
-			end
-		end
-	end
-
-	if nearestRoot and nearestModel then
-		local roundedDist = math.floor(nearestDistance)
-
-		-- Calculate position: 5 studs in front of target, 2 studs up
-		local destination = nearestRoot.Position
-			+ nearestRoot.CFrame.LookVector * 5
-			+ Vector3.new(0, 2, 0)
-
-		-- Teleport character (and face the target)
-		character:PivotTo(CFrame.lookAt(destination, nearestRoot.Position))
-
-		-- Update UI
-		infoLabel.Text = string.format(
-			"Candidate: %s\nDistance: %d studs (Teleported)",
-			nearestModel.Name,
-			roundedDist
-		)
-
-		-- Console Output
-		print("TARGET:", nearestModel:GetFullName())
-		print("DISTANCE:", roundedDist)
-	else
-		infoLabel.Text = "No candidate found"
-		warn("No candidate found")
-	end
+	-- Update UI and Console
+	infoLabel.Text = string.format(
+		"Jumps: %d (+%d studs)\nPos: %d, %d, %d",
+		teleportCount,
+		STEP_DISTANCE,
+		math.floor(pos.X),
+		math.floor(pos.Y),
+		math.floor(pos.Z)
+	)
+	print(string.format("Teleport #%d | Moved %d studs forward", teleportCount, STEP_DISTANCE))
 end
 
 -- Button Connections
@@ -117,9 +89,9 @@ startButton.MouseButton1Click:Connect(function()
 	active = not active
 	startButton.Text = active and "STOP" or "START"
 	if active then
-		scanAndTeleport()
+		teleportForward()
 	else
-		infoLabel.Text = "Scanner paused"
+		infoLabel.Text = "Status: Paused (Jumps: " .. teleportCount .. ")"
 	end
 end)
 
@@ -129,12 +101,12 @@ closeButton.MouseButton1Click:Connect(function()
 	gui:Destroy()
 end)
 
--- Background Loop (Runs every 4 seconds when active)
+-- Background Loop (Runs every 2 seconds when active)
 task.spawn(function()
 	while alive and gui.Parent do
-		task.wait(4)
+		task.wait(INTERVAL)
 		if alive and active then
-			scanAndTeleport()
+			teleportForward()
 		end
 	end
 end)
