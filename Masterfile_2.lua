@@ -5,12 +5,17 @@ local GuiService = game:GetService("GuiService")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- Configuration
-local DUNGEON_INTERVAL  = 0.6  -- Settle delay for menu stages
-local COMBAT_INTERVAL   = 0.5  -- Interval for combat teleporting
-local CLEAR_DELAY       = 2.0  -- Delay after room clear before going through door
-local STEP_DISTANCE     = 90   -- Studs to jump forward into next room
+-- -------------------------------------------------------------
+-- Default Timing & Settings (Editable live from UI)
+-- -------------------------------------------------------------
+local DUNGEON_INTERVAL  = 0.6  -- Settle delay for menu clicks (Stages 1-3)
+local COMBAT_INTERVAL   = 0.5  -- Scan interval for enemy teleporting
+local CLEAR_DELAY       = 2.0  -- Delay after room clear before moving to next room
+local STEP_DISTANCE     = 90   -- Fallback jump distance if no room model is found
 
+-- -------------------------------------------------------------
+-- Clean up existing Master UI
+-- -------------------------------------------------------------
 local oldGui = playerGui:FindFirstChild("NS_MasterAutomation")
 if oldGui then oldGui:Destroy() end
 
@@ -20,48 +25,69 @@ gui.ResetOnSpawn = false
 gui.DisplayOrder = 100
 gui.Parent = playerGui
 
+-- -------------------------------------------------------------
+-- Main Draggable Window (Supports Minimize)
+-- -------------------------------------------------------------
+local EXPANDED_HEIGHT = 465
+local MINIMIZED_HEIGHT = 32
+
 local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.fromOffset(310, 360)
-frame.Position = UDim2.new(0.5, -155, 0.2, 0)
+frame.Size = UDim2.fromOffset(320, EXPANDED_HEIGHT)
+frame.Position = UDim2.new(0.5, -160, 0.15, 0)
 frame.BackgroundColor3 = Color3.fromRGB(24, 28, 38)
 frame.BorderSizePixel = 0
+frame.ClipsDescendants = true
 frame.Active = true
 frame.Draggable = true
 
--- Title & Close
+-- Title Bar
 local title = Instance.new("TextLabel", frame)
-title.Size = UDim2.new(1, -35, 0, 30)
+title.Size = UDim2.new(1, -65, 0, 30)
 title.Position = UDim2.fromOffset(10, 0)
 title.BackgroundTransparency = 1
 title.TextColor3 = Color3.fromRGB(255, 215, 0)
 title.TextSize = 13
 title.Font = Enum.Font.SourceSansBold
 title.TextXAlignment = Enum.TextXAlignment.Left
-title.Text = "Dungeon QA, Combat & Door Master"
+title.Text = "QA, Combat & Room Master"
 
+-- Minimize Button [-] / [+]
+local minBtn = Instance.new("TextButton", frame)
+minBtn.Size = UDim2.fromOffset(24, 24)
+minBtn.Position = UDim2.new(1, -55, 0, 3)
+minBtn.Text = "-"
+minBtn.TextSize = 14
+minBtn.Font = Enum.Font.SourceSansBold
+minBtn.TextColor3 = Color3.new(1, 1, 1)
+minBtn.BackgroundColor3 = Color3.fromRGB(60, 70, 95)
+minBtn.BorderSizePixel = 0
+
+-- Close Button [X]
 local closeBtn = Instance.new("TextButton", frame)
-closeBtn.Size = UDim2.fromOffset(25, 25)
+closeBtn.Size = UDim2.fromOffset(24, 24)
 closeBtn.Position = UDim2.new(1, -28, 0, 3)
 closeBtn.Text = "X"
 closeBtn.TextSize = 12
+closeBtn.Font = Enum.Font.SourceSansBold
 closeBtn.TextColor3 = Color3.new(1, 1, 1)
 closeBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
 closeBtn.BorderSizePixel = 0
 
+-- Master [START ALL] Button
 local masterBtn = Instance.new("TextButton", frame)
-masterBtn.Size = UDim2.new(1, -20, 0, 32)
-masterBtn.Position = UDim2.fromOffset(10, 30)
-masterBtn.Text = "START ALL (Full Autonomous Loop)"
-masterBtn.TextSize = 13
+masterBtn.Size = UDim2.new(1, -20, 0, 30)
+masterBtn.Position = UDim2.fromOffset(10, 34)
+masterBtn.Text = "START ALL (Autonomous Loop)"
+masterBtn.TextSize = 12
 masterBtn.Font = Enum.Font.SourceSansBold
 masterBtn.TextColor3 = Color3.new(1, 1, 1)
 masterBtn.BackgroundColor3 = Color3.fromRGB(38, 140, 75)
 masterBtn.BorderSizePixel = 0
 
--- UI Section Helper
+-- Helper to create module sections
 local function createSection(yPos, titleText, color)
     local box = Instance.new("Frame", frame)
-    box.Size = UDim2.new(1, -20, 0, 85)
+    box.Size = UDim2.new(1, -20, 0, 75)
     box.Position = UDim2.fromOffset(10, yPos)
     box.BackgroundColor3 = Color3.fromRGB(32, 38, 52)
     box.BorderSizePixel = 0
@@ -71,13 +97,13 @@ local function createSection(yPos, titleText, color)
     t.Position = UDim2.fromOffset(6, 4)
     t.BackgroundTransparency = 1
     t.TextColor3 = color
-    t.TextSize = 12
+    t.TextSize = 11
     t.Font = Enum.Font.SourceSansBold
     t.TextXAlignment = Enum.TextXAlignment.Left
     t.Text = titleText
 
     local btn = Instance.new("TextButton", box)
-    btn.Size = UDim2.fromOffset(72, 22)
+    btn.Size = UDim2.fromOffset(72, 20)
     btn.Position = UDim2.new(1, -78, 0, 4)
     btn.Text = "START"
     btn.TextSize = 11
@@ -87,11 +113,11 @@ local function createSection(yPos, titleText, color)
     btn.BorderSizePixel = 0
 
     local stat = Instance.new("TextLabel", box)
-    stat.Size = UDim2.new(1, -12, 0, 55)
-    stat.Position = UDim2.fromOffset(6, 26)
+    stat.Size = UDim2.new(1, -12, 0, 48)
+    stat.Position = UDim2.fromOffset(6, 24)
     stat.BackgroundTransparency = 1
     stat.TextColor3 = Color3.new(0.9, 0.9, 0.9)
-    stat.TextSize = 11
+    stat.TextSize = 10
     stat.TextWrapped = true
     stat.TextXAlignment = Enum.TextXAlignment.Left
     stat.TextYAlignment = Enum.TextYAlignment.Top
@@ -101,20 +127,125 @@ local function createSection(yPos, titleText, color)
 end
 
 local _, dungeonToggle, dungeonStatus = createSection(68, "1. Dungeon Loop (Stages 1-3)", Color3.fromRGB(130, 200, 255))
-local _, combatToggle, combatStatus   = createSection(160, "2. Combat Scanner (0.5s)", Color3.fromRGB(255, 150, 130))
-local _, doorToggle, doorStatus       = createSection(252, "3. Door / Room Forwarder (2s)", Color3.fromRGB(140, 240, 180))
+local _, combatToggle, combatStatus   = createSection(147, "2. Combat Scanner", Color3.fromRGB(255, 150, 130))
+local _, roomToggle, roomStatus       = createSection(226, "3. Next Room Navigator (Sol. 1)", Color3.fromRGB(140, 240, 180))
 
--- State
+-- -------------------------------------------------------------
+-- Section 4: Live Delay Inputs
+-- -------------------------------------------------------------
+local settingsBox = Instance.new("Frame", frame)
+settingsBox.Size = UDim2.new(1, -20, 0, 150)
+settingsBox.Position = UDim2.fromOffset(10, 305)
+settingsBox.BackgroundColor3 = Color3.fromRGB(28, 33, 46)
+settingsBox.BorderSizePixel = 0
+
+local setHeader = Instance.new("TextLabel", settingsBox)
+setHeader.Size = UDim2.new(1, -10, 0, 20)
+setHeader.Position = UDim2.fromOffset(6, 4)
+setHeader.BackgroundTransparency = 1
+setHeader.TextColor3 = Color3.fromRGB(255, 215, 0)
+setHeader.TextSize = 11
+setHeader.Font = Enum.Font.SourceSansBold
+setHeader.TextXAlignment = Enum.TextXAlignment.Left
+setHeader.Text = "Timing & Delays (Click to Edit)"
+
+local function createSettingInput(yPos, labelText, defaultVal)
+    local lbl = Instance.new("TextLabel", settingsBox)
+    lbl.Size = UDim2.new(1, -80, 0, 22)
+    lbl.Position = UDim2.fromOffset(6, yPos)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = Color3.new(0.85, 0.85, 0.85)
+    lbl.TextSize = 11
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Text = labelText
+
+    local box = Instance.new("TextBox", settingsBox)
+    box.Size = UDim2.fromOffset(65, 22)
+    box.Position = UDim2.new(1, -72, 0, yPos)
+    box.Text = tostring(defaultVal)
+    box.TextSize = 11
+    box.Font = Enum.Font.SourceSansBold
+    box.TextColor3 = Color3.new(1, 1, 1)
+    box.BackgroundColor3 = Color3.fromRGB(45, 52, 70)
+    box.BorderSizePixel = 0
+    box.ClearTextOnFocus = false
+
+    return box
+end
+
+local dungeonInput = createSettingInput(28, "Dungeon Menu Delay (s):", DUNGEON_INTERVAL)
+local combatInput  = createSettingInput(56, "Combat Interval (s):", COMBAT_INTERVAL)
+local doorInput    = createSettingInput(84, "Door Clear Delay (s):", CLEAR_DELAY)
+local stepInput    = createSettingInput(112, "Fallback Step (studs):", STEP_DISTANCE)
+
+-- Hook up live input changes
+dungeonInput.FocusLost:Connect(function()
+    local val = tonumber(dungeonInput.Text)
+    if val and val > 0 then
+        DUNGEON_INTERVAL = val
+    else
+        dungeonInput.Text = tostring(DUNGEON_INTERVAL)
+    end
+end)
+
+combatInput.FocusLost:Connect(function()
+    local val = tonumber(combatInput.Text)
+    if val and val > 0 then
+        COMBAT_INTERVAL = val
+    else
+        combatInput.Text = tostring(COMBAT_INTERVAL)
+    end
+end)
+
+doorInput.FocusLost:Connect(function()
+    local val = tonumber(doorInput.Text)
+    if val and val >= 0 then
+        CLEAR_DELAY = val
+    else
+        doorInput.Text = tostring(CLEAR_DELAY)
+    end
+end)
+
+stepInput.FocusLost:Connect(function()
+    local val = tonumber(stepInput.Text)
+    if val and val > 0 then
+        STEP_DISTANCE = val
+    else
+        stepInput.Text = tostring(STEP_DISTANCE)
+    end
+end)
+
+-- -------------------------------------------------------------
+-- State Variables
+-- -------------------------------------------------------------
 local alive = true
+local isMinimized = false
 local dungeonActive = false
 local combatActive = false
-local doorActive = false
+local roomActive = false
 local dungeonBusy = false
+
+local currentRoomIndex = 1
 local hadEnemiesInRoom = false
 local clearTimerStart = nil
-local forwardJumps = 0
 
--- Helpers
+-- -------------------------------------------------------------
+-- Minimize / Restore Toggle
+-- -------------------------------------------------------------
+minBtn.MouseButton1Click:Connect(function()
+    isMinimized = not isMinimized
+    if isMinimized then
+        minBtn.Text = "+"
+        frame.Size = UDim2.fromOffset(320, MINIMIZED_HEIGHT)
+    else
+        minBtn.Text = "-"
+        frame.Size = UDim2.fromOffset(320, EXPANDED_HEIGHT)
+    end
+end)
+
+-- -------------------------------------------------------------
+-- Shared Helpers
+-- -------------------------------------------------------------
 local function isVisible(obj)
     if not obj or not obj:IsDescendantOf(playerGui) then return false end
     local cur = obj
@@ -132,6 +263,11 @@ local function clickButton(b)
     if typeof(firesignal) == "function" then
         pcall(function() firesignal(b.Activated) end)
         pcall(function() firesignal(b.MouseButton1Click) end)
+        for _, ch in ipairs(b:GetChildren()) do
+            if ch:IsA("GuiButton") or ch:IsA("TextLabel") then
+                pcall(function() firesignal(ch.Activated) end)
+            end
+        end
     else
         local inset = GuiService:GetGuiInset()
         local cx = b.AbsolutePosition.X + (b.AbsoluteSize.X / 2)
@@ -181,10 +317,80 @@ local function getAliveEnemyCount()
     return c
 end
 
--- 1. Dungeon Loop Step
+-- -------------------------------------------------------------
+-- Solution 1: Room Model & Anchor Resolver
+-- -------------------------------------------------------------
+local function getRoomsContainer()
+    local main = workspace:FindFirstChild("__Main")
+    if main then
+        local r = main:FindFirstChild("__Rooms") or main:FindFirstChild("Rooms") or main:FindFirstChild("__Map") or main:FindFirstChild("Map") or main:FindFirstChild("Floors")
+        if r then return r end
+    end
+    return workspace:FindFirstChild("Rooms") or workspace:FindFirstChild("Map") or workspace:FindFirstChild("Dungeon")
+end
+
+local function findRoomModel(index)
+    local container = getRoomsContainer()
+    local searchNames = {
+        "Room" .. index,
+        "Room " .. index,
+        "Room_" .. index,
+        "Floor" .. index,
+        "Floor " .. index,
+        "Stage" .. index,
+        tostring(index)
+    }
+
+    if container then
+        for _, name in ipairs(searchNames) do
+            local found = container:FindFirstChild(name)
+            if found and found:IsA("Model") then return found end
+        end
+        -- Fallback: check by child index if sorted
+        local children = container:GetChildren()
+        if children[index] and children[index]:IsA("Model") then
+            return children[index]
+        end
+    end
+
+    -- Check direct workspace models
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj:IsA("Model") then
+            for _, name in ipairs(searchNames) do
+                if obj.Name == name then return obj end
+            end
+        end
+    end
+    return nil
+end
+
+local function getRoomTargetCFrame(roomModel)
+    if not roomModel then return nil end
+    local anchorNames = {"Entrance", "Spawn", "Start", "Door", "Center", "Checkpoint"}
+    for _, name in ipairs(anchorNames) do
+        local anchor = roomModel:FindFirstChild(name, true)
+        if anchor and anchor:IsA("BasePart") then
+            return anchor.CFrame + Vector3.new(0, 3, 0)
+        end
+    end
+    if roomModel.PrimaryPart then
+        return roomModel.PrimaryPart.CFrame + Vector3.new(0, 3, 0)
+    end
+    for _, desc in ipairs(roomModel:GetDescendants()) do
+        if desc:IsA("BasePart") then
+            return desc.CFrame + Vector3.new(0, 3, 0)
+        end
+    end
+    return nil
+end
+
+-- -------------------------------------------------------------
+-- Module 1: Dungeon Loop (Stages 1-3)
+-- -------------------------------------------------------------
 local function stepDungeon()
     if dungeonBusy or not dungeonActive then return end
     dungeonBusy = true
+
     pcall(function()
         local paCols = getPaCols()
         if not paCols then return end
@@ -193,7 +399,9 @@ local function stepDungeon()
         local listPane = paCols:FindFirstChild("list")
         local leaderPane = paCols:FindFirstChild("leader") or paCols:FindFirstChild("wave")
 
+        -- Stage 1: Pay with Gems
         if completed and isVisible(completed) then
+            currentRoomIndex = 1 -- Reset room count for next run
             local opts = completed:FindFirstChild("pa_opts", true)
             local gemsBtn = nil
             if opts then
@@ -214,6 +422,7 @@ local function stepDungeon()
             return
         end
 
+        -- Stage 2: Create Party
         if listPane and isVisible(listPane) then
             local foot = listPane:FindFirstChild("pa_foot", true)
             local createBtn = (foot and foot:FindFirstChild("btn", true)) or findButtonWithText(listPane, "CREATE PARTY")
@@ -226,6 +435,7 @@ local function stepDungeon()
             return
         end
 
+        -- Stage 3: Start Party
         if leaderPane and isVisible(leaderPane) then
             local paStart = leaderPane:FindFirstChild("pa_start", true)
             local paGo = paStart and paStart:FindFirstChild("pa_go", true)
@@ -241,10 +451,13 @@ local function stepDungeon()
         end
         dungeonStatus.Text = "In Dungeon Run"
     end)
+
     dungeonBusy = false
 end
 
--- 2. Combat Scanner Step
+-- -------------------------------------------------------------
+-- Module 2: Combat Teleport Step
+-- -------------------------------------------------------------
 local function stepCombat()
     if not combatActive then return end
     local char = player.Character
@@ -278,9 +491,11 @@ local function stepCombat()
     end
 end
 
--- 3. Door Forwarder Step
-local function stepDoor()
-    if not doorActive then return end
+-- -------------------------------------------------------------
+-- Module 3: Solution 1 Room / Anchor Navigator
+-- -------------------------------------------------------------
+local function stepRoom()
+    if not roomActive then return end
     local char = player.Character
     local myRoot = char and char:FindFirstChild("HumanoidRootPart")
     if not myRoot then return end
@@ -289,57 +504,78 @@ local function stepDoor()
     if count > 0 then
         hadEnemiesInRoom = true
         clearTimerStart = nil
-        doorStatus.Text = string.format("Fighting (Door Closed)\nEnemies alive: %d", count)
+        roomStatus.Text = string.format("Fighting Room %d\nEnemies alive: %d (Door Closed)", currentRoomIndex, count)
     else
         if hadEnemiesInRoom then
             if not clearTimerStart then clearTimerStart = tick() end
             local rem = math.max(0, CLEAR_DELAY - (tick() - clearTimerStart))
             if rem > 0 then
-                doorStatus.Text = string.format("Room Clear! Door Opening...\nMoving in: %.1fs", rem)
+                roomStatus.Text = string.format("Room %d Cleared! Door Opening...\nMoving in: %.1fs", currentRoomIndex, rem)
             else
-                doorStatus.Text = "Teleporting through door..."
-                char:PivotTo(myRoot.CFrame + (myRoot.CFrame.LookVector * STEP_DISTANCE) + Vector3.new(0, 2, 0))
-                forwardJumps += 1
+                roomStatus.Text = "Navigating to Next Room..."
+                local nextIndex = currentRoomIndex + 1
+                local nextRoomModel = findRoomModel(nextIndex)
+                local targetCFrame = getRoomTargetCFrame(nextRoomModel)
+
+                if targetCFrame then
+                    -- Direct Room Anchor Teleport (Zig-Zag proof)
+                    char:PivotTo(targetCFrame)
+                    currentRoomIndex = nextIndex
+                    roomStatus.Text = string.format("Teleported to Room %d (Anchor)", currentRoomIndex)
+                else
+                    -- Fallback: Step forward through doorway
+                    char:PivotTo(myRoot.CFrame + (myRoot.CFrame.LookVector * STEP_DISTANCE) + Vector3.new(0, 2, 0))
+                    currentRoomIndex = nextIndex
+                    roomStatus.Text = string.format("Stepped forward to Room %d", currentRoomIndex)
+                end
+
                 hadEnemiesInRoom = false
                 clearTimerStart = nil
-                doorStatus.Text = string.format("Jumped to Next Room (#%d)", forwardJumps)
                 task.wait(1.0)
             end
         else
-            doorStatus.Text = string.format("Searching for room/enemies...\nJumps taken: %d", forwardJumps)
+            roomStatus.Text = string.format("Waiting in Room %d / Streaming...", currentRoomIndex)
             if not clearTimerStart then clearTimerStart = tick() end
-            if (tick() - clearTimerStart) >= (CLEAR_DELAY + 0.5) then
-                char:PivotTo(myRoot.CFrame + (myRoot.CFrame.LookVector * STEP_DISTANCE) + Vector3.new(0, 2, 0))
-                forwardJumps += 1
+            if (tick() - clearTimerStart) >= (CLEAR_DELAY + 1.0) then
+                -- Scout step if standing empty for too long
+                local nextRoomModel = findRoomModel(currentRoomIndex + 1)
+                local targetCFrame = getRoomTargetCFrame(nextRoomModel)
+                if targetCFrame then
+                    char:PivotTo(targetCFrame)
+                    currentRoomIndex += 1
+                else
+                    char:PivotTo(myRoot.CFrame + (myRoot.CFrame.LookVector * STEP_DISTANCE) + Vector3.new(0, 2, 0))
+                end
                 clearTimerStart = nil
-                doorStatus.Text = string.format("Stepped Forward (#%d)", forwardJumps)
                 task.wait(1.0)
             end
         end
     end
 end
 
--- UI Toggle Handlers
+-- -------------------------------------------------------------
+-- Toggle Sync
+-- -------------------------------------------------------------
 local function updateToggles()
     dungeonToggle.Text = dungeonActive and "STOP" or "START"
     dungeonToggle.BackgroundColor3 = dungeonActive and Color3.fromRGB(180, 50, 50) or Color3.fromRGB(55, 65, 88)
     combatToggle.Text = combatActive and "STOP" or "START"
     combatToggle.BackgroundColor3 = combatActive and Color3.fromRGB(180, 50, 50) or Color3.fromRGB(55, 65, 88)
-    doorToggle.Text = doorActive and "STOP" or "START"
-    doorToggle.BackgroundColor3 = doorActive and Color3.fromRGB(180, 50, 50) or Color3.fromRGB(55, 65, 88)
+    roomToggle.Text = roomActive and "STOP" or "START"
+    roomToggle.BackgroundColor3 = roomActive and Color3.fromRGB(180, 50, 50) or Color3.fromRGB(55, 65, 88)
 
-    local allOn = dungeonActive and combatActive and doorActive
-    masterBtn.Text = allOn and "STOP ALL" or "START ALL (Full Autonomous Loop)"
+    local allOn = dungeonActive and combatActive and roomActive
+    masterBtn.Text = allOn and "STOP ALL" or "START ALL (Autonomous Loop)"
     masterBtn.BackgroundColor3 = allOn and Color3.fromRGB(180, 45, 45) or Color3.fromRGB(38, 140, 75)
 end
 
 dungeonToggle.MouseButton1Click:Connect(function() dungeonActive = not dungeonActive; updateToggles() end)
 combatToggle.MouseButton1Click:Connect(function() combatActive = not combatActive; updateToggles() end)
-doorToggle.MouseButton1Click:Connect(function() doorActive = not doorActive; updateToggles() end)
+roomToggle.MouseButton1Click:Connect(function() roomActive = not roomActive; updateToggles() end)
 
 masterBtn.MouseButton1Click:Connect(function()
-    local target = not (dungeonActive and combatActive and doorActive)
-    dungeonActive, combatActive, doorActive = target, target, target
+    local target = not (dungeonActive and combatActive and roomActive)
+    dungeonActive, combatActive, roomActive = target, target, target
     updateToggles()
 end)
 
@@ -348,7 +584,9 @@ closeBtn.MouseButton1Click:Connect(function()
     gui:Destroy()
 end)
 
--- Background Loops
+-- -------------------------------------------------------------
+-- Background Automation Loops
+-- -------------------------------------------------------------
 task.spawn(function()
     while alive and gui.Parent do
         task.wait(DUNGEON_INTERVAL)
@@ -366,6 +604,6 @@ end)
 task.spawn(function()
     while alive and gui.Parent do
         task.wait(0.25)
-        if alive and doorActive then stepDoor() end
+        if alive and roomActive then stepRoom() end
     end
 end)
