@@ -188,7 +188,6 @@ scanMapBtn.TextColor3 = Color3.new(1, 1, 1)
 scanMapBtn.BackgroundColor3 = Color3.fromRGB(50, 75, 110)
 scanMapBtn.BorderSizePixel = 0
 
--- Hook up live input changes
 dungeonInput.FocusLost:Connect(function()
     local val = tonumber(dungeonInput.Text)
     if val and val > 0 then DUNGEON_INTERVAL = val else dungeonInput.Text = tostring(DUNGEON_INTERVAL) end
@@ -219,6 +218,7 @@ local combatActive = false
 local roomActive = false
 local dungeonBusy = false
 
+local lastEnteredRoom = 0  -- Tracks the last room your character physically teleported to
 local clearTimerStart = nil
 
 -- -------------------------------------------------------------
@@ -296,7 +296,6 @@ local function getDungeonHUDInfo()
                     enemiesLeft = tonumber(left)
                     enemiesTotal = tonumber(tot)
                 else
-                    -- Check sibling label if number is separate
                     local parent = desc.Parent
                     if parent then
                         for _, sib in ipairs(parent:GetChildren()) do
@@ -350,7 +349,7 @@ end
 -- -------------------------------------------------------------
 -- Room Model & Center Coordinate Resolver
 -- -------------------------------------------------------------
-local function findRoomModel(roomNum)
+local function findRoomModel(roomNum, totalRooms)
     if not roomNum then return nil end
     local searchNames = {
         "room" .. roomNum,
@@ -371,7 +370,7 @@ local function findRoomModel(roomNum)
             end
         end
     end
-    for _, name in ipairs({"Rooms", "Map", "Dungeon", "Stages", "Floors"}) do
+    for _, name in ipairs({"Rooms", "__Rooms", "Map", "__Map", "Dungeon", "Stages", "Floors"}) do
         local c = workspace:FindFirstChild(name)
         if c then table.insert(containers, c) end
     end
@@ -390,10 +389,19 @@ local function findRoomModel(roomNum)
         end
     end
 
+    -- Check by ordered child index if container has matching count (e.g. 8 rooms)
+    for _, container in ipairs(containers) do
+        local children = container:GetChildren()
+        if totalRooms and #children == totalRooms then
+            if children[roomNum] and (children[roomNum]:IsA("Model") or children[roomNum]:IsA("Folder")) then
+                return children[roomNum]
+            end
+        end
+    end
+
     return nil
 end
 
--- Calculates the EXACT 3D center of the room model
 local function getRoomCenterCFrame(roomModel)
     if not roomModel then return nil end
 
@@ -413,12 +421,11 @@ local function getRoomCenterCFrame(roomModel)
     -- 2. Model:GetBoundingBox() gives mathematical center of the entire room
     if roomModel:IsA("Model") then
         local cf, size = roomModel:GetBoundingBox()
-        -- Center X and Z, elevated 3.5 studs above the floor
         local floorY = cf.Position.Y - (size.Y / 2) + 3.5
         return CFrame.new(cf.Position.X, floorY, cf.Position.Z)
     end
 
-    -- 3. If it's a folder, find largest BasePart (typically floor plate)
+    -- 3. If folder, find largest BasePart (floor plate)
     local largestPart = nil
     local largestArea = 0
     for _, desc in ipairs(roomModel:GetDescendants()) do
@@ -435,6 +442,26 @@ local function getRoomCenterCFrame(roomModel)
     end
 
     return nil
+end
+
+-- Tries target room, or intermediate room if distant room is streamed out
+local function resolveRoomTarget(targetRoomNum, totalRooms)
+    local model = findRoomModel(targetRoomNum, totalRooms)
+    if model then
+        local cf = getRoomCenterCFrame(model)
+        if cf then return cf, targetRoomNum end
+    end
+
+    -- If target room is not streamed in yet, hop forward through intermediate rooms
+    for intermediate = targetRoomNum - 1, 1, -1 do
+        local interModel = findRoomModel(intermediate, totalRooms)
+        if interModel then
+            local cf = getRoomCenterCFrame(interModel)
+            if cf then return cf, intermediate end
+        end
+    end
+
+    return nil, nil
 end
 
 -- Diagnostic Map Scanner
@@ -478,6 +505,7 @@ local function stepDungeon()
 
         -- Stage 1: Pay with Gems
         if completed and isVisible(completed) then
+            lastEnteredRoom = 0 -- Reset room tracker for next run
             local opts = completed:FindFirstChild("pa_opts", true)
             local gemsBtn = nil
             if opts then
@@ -568,7 +596,7 @@ local function stepCombat()
 end
 
 -- -------------------------------------------------------------
--- Module 3: HUD-Synced Room Navigator (Center Teleport)
+-- Module 3: Active Room Sync & Center Teleport
 -- -------------------------------------------------------------
 local function stepRoom()
     if not roomActive then return end
@@ -577,31 +605,53 @@ local function stepRoom()
     if not myRoot then return end
 
     local roomNum, totalRooms, enemiesLeft, enemiesTotal = getDungeonHUDInfo()
+    if not roomNum then
+        roomStatus.Text = "Waiting for Dungeon HUD..."
+        return
+    end
 
-    -- Fallback to client enemies folder count if HUD isn't visible yet
-    if enemiesLeft == nil then
-        local folder = getEnemiesFolder()
-        if folder then
-            local count = 0
-            for _, m in ipairs(folder:GetChildren()) do
-                if m:IsA("Model") and m:FindFirstChild("HumanoidRootPart", true) then count += 1 end
-            end
-            enemiesLeft = count
+    local curRoomText = tostring(roomNum) .. "/" .. tostring(totalRooms or 8)
+
+    -- ---------------------------------------------------------
+    -- Condition A: Catch-Up (You are left behind in an older room)
+    -- ---------------------------------------------------------
+    if lastEnteredRoom ~= roomNum then
+        -- HUD has already advanced to roomNum, but you haven't arrived there yet
+        roomStatus.Text = string.format("Advancing to Room %d Center...", roomNum)
+        local targetCenter, foundNum = resolveRoomTarget(roomNum, totalRooms)
+
+        if targetCenter then
+            char:PivotTo(targetCenter)
+            lastEnteredRoom = foundNum
+            roomStatus.Text = string.format("Teleported to Room %d Center!", foundNum)
+            task.wait(0.6)
+            return
         else
-            enemiesLeft = 0
+            -- If model not found, step forward toward it
+            char:PivotTo(myRoot.CFrame + (myRoot.CFrame.LookVector * STEP_DISTANCE) + Vector3.new(0, 2, 0))
+            lastEnteredRoom = roomNum
+            roomStatus.Text = string.format("Stepped toward Room %d", roomNum)
+            task.wait(0.6)
+            return
         end
     end
 
-    local curRoomText = roomNum and (tostring(roomNum) .. "/" .. tostring(totalRooms or 8)) or "?"
+    -- ---------------------------------------------------------
+    -- Condition B: Inside the Active Room
+    -- ---------------------------------------------------------
+    -- Default enemiesLeft if not read yet
+    if enemiesLeft == nil then
+        local folder = getEnemiesFolder()
+        enemiesLeft = (folder and #folder:GetChildren()) or 1
+    end
 
     if enemiesLeft > 0 then
-        -- Room still has enemies -> Hold position and fight
+        -- Currently fighting inside this room
         clearTimerStart = nil
         roomStatus.Text = string.format("Room %s: Fighting (%d left)\nDoor is closed.", curRoomText, enemiesLeft)
     else
-        -- 0 enemies left in room!
-        -- Check if it's the final room (e.g. Room 8 / 8)
-        if roomNum and totalRooms and roomNum >= totalRooms then
+        -- 0 enemies left in this room
+        if totalRooms and roomNum >= totalRooms then
             roomStatus.Text = string.format("Boss Room %s Cleared!\nWaiting for Completion Menu...", curRoomText)
             clearTimerStart = nil
             return
@@ -611,25 +661,25 @@ local function stepRoom()
         local remaining = math.max(0, CLEAR_DELAY - (tick() - clearTimerStart))
 
         if remaining > 0 then
-            roomStatus.Text = string.format("Room %s Cleared! Door Open!\nMoving to Center in: %.1fs", curRoomText, remaining)
+            roomStatus.Text = string.format("Room %s Cleared! Door Open!\nMoving in: %.1fs", curRoomText, remaining)
         else
-            roomStatus.Text = "Teleporting to Center of Next Room..."
-            local targetRoomNum = (roomNum and (roomNum + 1)) or 2
-            local nextRoomModel = findRoomModel(targetRoomNum)
-            local targetCenter = getRoomCenterCFrame(nextRoomModel)
+            -- 2s delay elapsed: Target the next room
+            local nextRoomNum = roomNum + 1
+            roomStatus.Text = string.format("Moving to Room %d Center...", nextRoomNum)
 
+            local targetCenter, foundNum = resolveRoomTarget(nextRoomNum, totalRooms)
             if targetCenter then
-                -- Direct 3D Center Teleport (Zig-zag / curve proof)
                 char:PivotTo(targetCenter)
-                roomStatus.Text = string.format("Teleported to Center of Room %d!", targetRoomNum)
+                lastEnteredRoom = foundNum
+                roomStatus.Text = string.format("Teleported to Room %d Center!", foundNum)
             else
-                -- Fallback step forward if model name not detected
                 char:PivotTo(myRoot.CFrame + (myRoot.CFrame.LookVector * STEP_DISTANCE) + Vector3.new(0, 2, 0))
-                roomStatus.Text = string.format("Stepped forward toward Room %d", targetRoomNum)
+                lastEnteredRoom = nextRoomNum
+                roomStatus.Text = string.format("Stepped toward Room %d", nextRoomNum)
             end
 
             clearTimerStart = nil
-            task.wait(1.2) -- Allow Roblox to stream in new room
+            task.wait(1.0)
         end
     end
 end
