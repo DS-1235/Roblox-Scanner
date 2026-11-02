@@ -11,10 +11,10 @@ local playerGui = player:WaitForChild("PlayerGui")
 local DUNGEON_INTERVAL  = 0.6  -- Settle delay for menu clicks (Stages 1-3)
 local COMBAT_INTERVAL   = 0.5  -- Scan interval for enemy teleporting
 local CLEAR_DELAY       = 2.0  -- Delay after room clear before moving to next room
-local STEP_DISTANCE     = 90   -- Fallback jump distance if no room model is found
+local STEP_DISTANCE     = 90   -- Fallback distance if room model isn't found
 
 -- -------------------------------------------------------------
--- Clean up existing Master UI
+-- Clean up existing UI
 -- -------------------------------------------------------------
 local oldGui = playerGui:FindFirstChild("NS_MasterAutomation")
 if oldGui then oldGui:Destroy() end
@@ -28,12 +28,12 @@ gui.Parent = playerGui
 -- -------------------------------------------------------------
 -- Main Draggable Window (Supports Minimize)
 -- -------------------------------------------------------------
-local EXPANDED_HEIGHT = 465
+local EXPANDED_HEIGHT = 490
 local MINIMIZED_HEIGHT = 32
 
 local frame = Instance.new("Frame", gui)
 frame.Size = UDim2.fromOffset(320, EXPANDED_HEIGHT)
-frame.Position = UDim2.new(0.5, -160, 0.15, 0)
+frame.Position = UDim2.new(0.5, -160, 0.12, 0)
 frame.BackgroundColor3 = Color3.fromRGB(24, 28, 38)
 frame.BorderSizePixel = 0
 frame.ClipsDescendants = true
@@ -128,13 +128,13 @@ end
 
 local _, dungeonToggle, dungeonStatus = createSection(68, "1. Dungeon Loop (Stages 1-3)", Color3.fromRGB(130, 200, 255))
 local _, combatToggle, combatStatus   = createSection(147, "2. Combat Scanner", Color3.fromRGB(255, 150, 130))
-local _, roomToggle, roomStatus       = createSection(226, "3. Next Room Navigator (Sol. 1)", Color3.fromRGB(140, 240, 180))
+local _, roomToggle, roomStatus       = createSection(226, "3. Room Navigator (Center Teleport)", Color3.fromRGB(140, 240, 180))
 
 -- -------------------------------------------------------------
--- Section 4: Live Delay Inputs
+-- Section 4: Live Delay Inputs & Diagnostic Tool
 -- -------------------------------------------------------------
 local settingsBox = Instance.new("Frame", frame)
-settingsBox.Size = UDim2.new(1, -20, 0, 150)
+settingsBox.Size = UDim2.new(1, -20, 0, 175)
 settingsBox.Position = UDim2.fromOffset(10, 305)
 settingsBox.BackgroundColor3 = Color3.fromRGB(28, 33, 46)
 settingsBox.BorderSizePixel = 0
@@ -173,46 +173,40 @@ local function createSettingInput(yPos, labelText, defaultVal)
     return box
 end
 
-local dungeonInput = createSettingInput(28, "Dungeon Menu Delay (s):", DUNGEON_INTERVAL)
-local combatInput  = createSettingInput(56, "Combat Interval (s):", COMBAT_INTERVAL)
-local doorInput    = createSettingInput(84, "Door Clear Delay (s):", CLEAR_DELAY)
-local stepInput    = createSettingInput(112, "Fallback Step (studs):", STEP_DISTANCE)
+local dungeonInput = createSettingInput(26, "Dungeon Menu Delay (s):", DUNGEON_INTERVAL)
+local combatInput  = createSettingInput(52, "Combat Interval (s):", COMBAT_INTERVAL)
+local doorInput    = createSettingInput(78, "Door Clear Delay (s):", CLEAR_DELAY)
+local stepInput    = createSettingInput(104, "Fallback Step (studs):", STEP_DISTANCE)
+
+local scanMapBtn = Instance.new("TextButton", settingsBox)
+scanMapBtn.Size = UDim2.new(1, -12, 0, 26)
+scanMapBtn.Position = UDim2.fromOffset(6, 138)
+scanMapBtn.Text = "SCAN MAP STRUCTURE (Print to F9)"
+scanMapBtn.TextSize = 11
+scanMapBtn.Font = Enum.Font.SourceSansBold
+scanMapBtn.TextColor3 = Color3.new(1, 1, 1)
+scanMapBtn.BackgroundColor3 = Color3.fromRGB(50, 75, 110)
+scanMapBtn.BorderSizePixel = 0
 
 -- Hook up live input changes
 dungeonInput.FocusLost:Connect(function()
     local val = tonumber(dungeonInput.Text)
-    if val and val > 0 then
-        DUNGEON_INTERVAL = val
-    else
-        dungeonInput.Text = tostring(DUNGEON_INTERVAL)
-    end
+    if val and val > 0 then DUNGEON_INTERVAL = val else dungeonInput.Text = tostring(DUNGEON_INTERVAL) end
 end)
 
 combatInput.FocusLost:Connect(function()
     local val = tonumber(combatInput.Text)
-    if val and val > 0 then
-        COMBAT_INTERVAL = val
-    else
-        combatInput.Text = tostring(COMBAT_INTERVAL)
-    end
+    if val and val > 0 then COMBAT_INTERVAL = val else combatInput.Text = tostring(COMBAT_INTERVAL) end
 end)
 
 doorInput.FocusLost:Connect(function()
     local val = tonumber(doorInput.Text)
-    if val and val >= 0 then
-        CLEAR_DELAY = val
-    else
-        doorInput.Text = tostring(CLEAR_DELAY)
-    end
+    if val and val >= 0 then CLEAR_DELAY = val else doorInput.Text = tostring(CLEAR_DELAY) end
 end)
 
 stepInput.FocusLost:Connect(function()
     local val = tonumber(stepInput.Text)
-    if val and val > 0 then
-        STEP_DISTANCE = val
-    else
-        stepInput.Text = tostring(STEP_DISTANCE)
-    end
+    if val and val > 0 then STEP_DISTANCE = val else stepInput.Text = tostring(STEP_DISTANCE) end
 end)
 
 -- -------------------------------------------------------------
@@ -225,8 +219,6 @@ local combatActive = false
 local roomActive = false
 local dungeonBusy = false
 
-local currentRoomIndex = 1
-local hadEnemiesInRoom = false
 local clearTimerStart = nil
 
 -- -------------------------------------------------------------
@@ -244,7 +236,7 @@ minBtn.MouseButton1Click:Connect(function()
 end)
 
 -- -------------------------------------------------------------
--- Shared Helpers
+-- Shared Helpers & HUD Parser
 -- -------------------------------------------------------------
 local function isVisible(obj)
     if not obj or not obj:IsDescendantOf(playerGui) then return false end
@@ -278,6 +270,56 @@ local function clickButton(b)
     end
 end
 
+-- Reads ROOM 5 / 8 and Enemies left 3 / 7 directly from game HUD
+local function getDungeonHUDInfo()
+    local roomNum, totalRooms = nil, nil
+    local enemiesLeft, enemiesTotal = nil, nil
+
+    for _, desc in ipairs(playerGui:GetDescendants()) do
+        if desc:IsA("TextLabel") and desc.Text and desc.Text ~= "" then
+            local clean = string.gsub(desc.Text, "<[^>]+>", "")
+            local upper = string.upper(clean)
+
+            -- Parse "ROOM 5 / 8"
+            if not roomNum and string.find(upper, "ROOM") then
+                local cur, tot = string.match(clean, "(%d+)%s*/%s*(%d+)")
+                if cur and tot then
+                    roomNum = tonumber(cur)
+                    totalRooms = tonumber(tot)
+                end
+            end
+
+            -- Parse "Enemies left 3 / 7"
+            if enemiesLeft == nil and string.find(upper, "ENEMIES LEFT") then
+                local left, tot = string.match(clean, "(%d+)%s*/%s*(%d+)")
+                if left then
+                    enemiesLeft = tonumber(left)
+                    enemiesTotal = tonumber(tot)
+                else
+                    -- Check sibling label if number is separate
+                    local parent = desc.Parent
+                    if parent then
+                        for _, sib in ipairs(parent:GetChildren()) do
+                            if sib ~= desc and sib:IsA("TextLabel") and sib.Text then
+                                local sClean = string.gsub(sib.Text, "<[^>]+>", "")
+                                local sLeft, sTot = string.match(sClean, "(%d+)%s*/%s*(%d+)")
+                                if sLeft then
+                                    enemiesLeft = tonumber(sLeft)
+                                    enemiesTotal = tonumber(sTot)
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if roomNum and enemiesLeft ~= nil then break end
+    end
+
+    return roomNum, totalRooms, enemiesLeft, enemiesTotal
+end
+
 local function getPaCols()
     local menus = playerGui:FindFirstChild("Menus")
     local uiParty = menus and menus:FindFirstChild("UI_Party")
@@ -305,84 +347,119 @@ local function getEnemiesFolder()
     return enemies and enemies:FindFirstChild("Client")
 end
 
-local function getAliveEnemyCount()
-    local folder = getEnemiesFolder()
-    if not folder then return 0 end
-    local c = 0
-    for _, m in ipairs(folder:GetChildren()) do
-        if m:IsA("Model") and m:FindFirstChild("HumanoidRootPart", true) and m:FindFirstChild("Hitbox", true) then
-            c += 1
-        end
-    end
-    return c
-end
-
 -- -------------------------------------------------------------
--- Solution 1: Room Model & Anchor Resolver
+-- Room Model & Center Coordinate Resolver
 -- -------------------------------------------------------------
-local function getRoomsContainer()
-    local main = workspace:FindFirstChild("__Main")
-    if main then
-        local r = main:FindFirstChild("__Rooms") or main:FindFirstChild("Rooms") or main:FindFirstChild("__Map") or main:FindFirstChild("Map") or main:FindFirstChild("Floors")
-        if r then return r end
-    end
-    return workspace:FindFirstChild("Rooms") or workspace:FindFirstChild("Map") or workspace:FindFirstChild("Dungeon")
-end
-
-local function findRoomModel(index)
-    local container = getRoomsContainer()
+local function findRoomModel(roomNum)
+    if not roomNum then return nil end
     local searchNames = {
-        "Room" .. index,
-        "Room " .. index,
-        "Room_" .. index,
-        "Floor" .. index,
-        "Floor " .. index,
-        "Stage" .. index,
-        tostring(index)
+        "room" .. roomNum,
+        "room " .. roomNum,
+        "room_" .. roomNum,
+        "floor" .. roomNum,
+        "stage" .. roomNum,
+        tostring(roomNum)
     }
 
-    if container then
-        for _, name in ipairs(searchNames) do
-            local found = container:FindFirstChild(name)
-            if found and found:IsA("Model") then return found end
-        end
-        -- Fallback: check by child index if sorted
-        local children = container:GetChildren()
-        if children[index] and children[index]:IsA("Model") then
-            return children[index]
-        end
-    end
-
-    -- Check direct workspace models
-    for _, obj in ipairs(workspace:GetChildren()) do
-        if obj:IsA("Model") then
-            for _, name in ipairs(searchNames) do
-                if obj.Name == name then return obj end
+    local containers = {}
+    local main = workspace:FindFirstChild("__Main")
+    if main then
+        table.insert(containers, main)
+        for _, ch in ipairs(main:GetChildren()) do
+            if ch:IsA("Folder") or ch:IsA("Model") then
+                table.insert(containers, ch)
             end
         end
     end
+    for _, name in ipairs({"Rooms", "Map", "Dungeon", "Stages", "Floors"}) do
+        local c = workspace:FindFirstChild(name)
+        if c then table.insert(containers, c) end
+    end
+    table.insert(containers, workspace)
+
+    for _, container in ipairs(containers) do
+        for _, child in ipairs(container:GetChildren()) do
+            if child:IsA("Model") or child:IsA("Folder") then
+                local lowerName = string.lower(child.Name)
+                for _, sName in ipairs(searchNames) do
+                    if lowerName == sName or string.find(lowerName, "^" .. sName .. "$") then
+                        return child
+                    end
+                end
+            end
+        end
+    end
+
     return nil
 end
 
-local function getRoomTargetCFrame(roomModel)
+-- Calculates the EXACT 3D center of the room model
+local function getRoomCenterCFrame(roomModel)
     if not roomModel then return nil end
-    local anchorNames = {"Entrance", "Spawn", "Start", "Door", "Center", "Checkpoint"}
+
+    -- 1. Explicit Anchor part if present
+    local anchorNames = {"Center", "Spawn", "Entrance", "Door", "Start", "Checkpoint"}
     for _, name in ipairs(anchorNames) do
         local anchor = roomModel:FindFirstChild(name, true)
         if anchor and anchor:IsA("BasePart") then
-            return anchor.CFrame + Vector3.new(0, 3, 0)
+            return anchor.CFrame + Vector3.new(0, 3.5, 0)
         end
     end
-    if roomModel.PrimaryPart then
-        return roomModel.PrimaryPart.CFrame + Vector3.new(0, 3, 0)
+
+    if roomModel:IsA("Model") and roomModel.PrimaryPart then
+        return roomModel.PrimaryPart.CFrame + Vector3.new(0, 3.5, 0)
     end
+
+    -- 2. Model:GetBoundingBox() gives mathematical center of the entire room
+    if roomModel:IsA("Model") then
+        local cf, size = roomModel:GetBoundingBox()
+        -- Center X and Z, elevated 3.5 studs above the floor
+        local floorY = cf.Position.Y - (size.Y / 2) + 3.5
+        return CFrame.new(cf.Position.X, floorY, cf.Position.Z)
+    end
+
+    -- 3. If it's a folder, find largest BasePart (typically floor plate)
+    local largestPart = nil
+    local largestArea = 0
     for _, desc in ipairs(roomModel:GetDescendants()) do
         if desc:IsA("BasePart") then
-            return desc.CFrame + Vector3.new(0, 3, 0)
+            local area = desc.Size.X * desc.Size.Z
+            if area > largestArea then
+                largestArea = area
+                largestPart = desc
+            end
         end
     end
+    if largestPart then
+        return largestPart.CFrame + Vector3.new(0, (largestPart.Size.Y / 2) + 3.5, 0)
+    end
+
     return nil
 end
+
+-- Diagnostic Map Scanner
+scanMapBtn.MouseButton1Click:Connect(function()
+    print("=================== MAP & ROOMS SCAN ===================")
+    local roomNum, totalRooms, enemiesLeft, enemiesTotal = getDungeonHUDInfo()
+    print(string.format("[HUD Status] Room: %s/%s | Enemies: %s/%s", 
+        tostring(roomNum), tostring(totalRooms), tostring(enemiesLeft), tostring(enemiesTotal)))
+
+    local main = workspace:FindFirstChild("__Main")
+    if main then
+        print("[workspace.__Main Children]:")
+        for _, ch in ipairs(main:GetChildren()) do
+            print("  - " .. ch.Name .. " (" .. ch.ClassName .. ") [Children: " .. #ch:GetChildren() .. "]")
+            if ch:IsA("Folder") or ch:IsA("Model") then
+                for _, sub in ipairs(ch:GetChildren()) do
+                    print("      * " .. sub.Name .. " (" .. sub.ClassName .. ")")
+                end
+            end
+        end
+    else
+        print("[Notice] workspace.__Main not found")
+    end
+    print("========================================================")
+end)
 
 -- -------------------------------------------------------------
 -- Module 1: Dungeon Loop (Stages 1-3)
@@ -401,7 +478,6 @@ local function stepDungeon()
 
         -- Stage 1: Pay with Gems
         if completed and isVisible(completed) then
-            currentRoomIndex = 1 -- Reset room count for next run
             local opts = completed:FindFirstChild("pa_opts", true)
             local gemsBtn = nil
             if opts then
@@ -492,7 +568,7 @@ local function stepCombat()
 end
 
 -- -------------------------------------------------------------
--- Module 3: Solution 1 Room / Anchor Navigator
+-- Module 3: HUD-Synced Room Navigator (Center Teleport)
 -- -------------------------------------------------------------
 local function stepRoom()
     if not roomActive then return end
@@ -500,55 +576,60 @@ local function stepRoom()
     local myRoot = char and char:FindFirstChild("HumanoidRootPart")
     if not myRoot then return end
 
-    local count = getAliveEnemyCount()
-    if count > 0 then
-        hadEnemiesInRoom = true
-        clearTimerStart = nil
-        roomStatus.Text = string.format("Fighting Room %d\nEnemies alive: %d (Door Closed)", currentRoomIndex, count)
-    else
-        if hadEnemiesInRoom then
-            if not clearTimerStart then clearTimerStart = tick() end
-            local rem = math.max(0, CLEAR_DELAY - (tick() - clearTimerStart))
-            if rem > 0 then
-                roomStatus.Text = string.format("Room %d Cleared! Door Opening...\nMoving in: %.1fs", currentRoomIndex, rem)
-            else
-                roomStatus.Text = "Navigating to Next Room..."
-                local nextIndex = currentRoomIndex + 1
-                local nextRoomModel = findRoomModel(nextIndex)
-                local targetCFrame = getRoomTargetCFrame(nextRoomModel)
+    local roomNum, totalRooms, enemiesLeft, enemiesTotal = getDungeonHUDInfo()
 
-                if targetCFrame then
-                    -- Direct Room Anchor Teleport (Zig-Zag proof)
-                    char:PivotTo(targetCFrame)
-                    currentRoomIndex = nextIndex
-                    roomStatus.Text = string.format("Teleported to Room %d (Anchor)", currentRoomIndex)
-                else
-                    -- Fallback: Step forward through doorway
-                    char:PivotTo(myRoot.CFrame + (myRoot.CFrame.LookVector * STEP_DISTANCE) + Vector3.new(0, 2, 0))
-                    currentRoomIndex = nextIndex
-                    roomStatus.Text = string.format("Stepped forward to Room %d", currentRoomIndex)
-                end
-
-                hadEnemiesInRoom = false
-                clearTimerStart = nil
-                task.wait(1.0)
+    -- Fallback to client enemies folder count if HUD isn't visible yet
+    if enemiesLeft == nil then
+        local folder = getEnemiesFolder()
+        if folder then
+            local count = 0
+            for _, m in ipairs(folder:GetChildren()) do
+                if m:IsA("Model") and m:FindFirstChild("HumanoidRootPart", true) then count += 1 end
             end
+            enemiesLeft = count
         else
-            roomStatus.Text = string.format("Waiting in Room %d / Streaming...", currentRoomIndex)
-            if not clearTimerStart then clearTimerStart = tick() end
-            if (tick() - clearTimerStart) >= (CLEAR_DELAY + 1.0) then
-                -- Scout step if standing empty for too long
-                local nextRoomModel = findRoomModel(currentRoomIndex + 1)
-                local targetCFrame = getRoomTargetCFrame(nextRoomModel)
-                if targetCFrame then
-                    char:PivotTo(targetCFrame)
-                    currentRoomIndex += 1
-                else
-                    char:PivotTo(myRoot.CFrame + (myRoot.CFrame.LookVector * STEP_DISTANCE) + Vector3.new(0, 2, 0))
-                end
-                clearTimerStart = nil
-                task.wait(1.0)
+            enemiesLeft = 0
+        end
+    end
+
+    local curRoomText = roomNum and (tostring(roomNum) .. "/" .. tostring(totalRooms or 8)) or "?"
+
+    if enemiesLeft > 0 then
+        -- Room still has enemies -> Hold position and fight
+        clearTimerStart = nil
+        roomStatus.Text = string.format("Room %s: Fighting (%d left)\nDoor is closed.", curRoomText, enemiesLeft)
+    else
+        -- 0 enemies left in room!
+        -- Check if it's the final room (e.g. Room 8 / 8)
+        if roomNum and totalRooms and roomNum >= totalRooms then
+            roomStatus.Text = string.format("Boss Room %s Cleared!\nWaiting for Completion Menu...", curRoomText)
+            clearTimerStart = nil
+            return
+        end
+
+        if not clearTimerStart then clearTimerStart = tick() end
+        local remaining = math.max(0, CLEAR_DELAY - (tick() - clearTimerStart))
+
+        if remaining > 0 then
+            roomStatus.Text = string.format("Room %s Cleared! Door Open!\nMoving to Center in: %.1fs", curRoomText, remaining)
+        else
+            roomStatus.Text = "Teleporting to Center of Next Room..."
+            local targetRoomNum = (roomNum and (roomNum + 1)) or 2
+            local nextRoomModel = findRoomModel(targetRoomNum)
+            local targetCenter = getRoomCenterCFrame(nextRoomModel)
+
+            if targetCenter then
+                -- Direct 3D Center Teleport (Zig-zag / curve proof)
+                char:PivotTo(targetCenter)
+                roomStatus.Text = string.format("Teleported to Center of Room %d!", targetRoomNum)
+            else
+                -- Fallback step forward if model name not detected
+                char:PivotTo(myRoot.CFrame + (myRoot.CFrame.LookVector * STEP_DISTANCE) + Vector3.new(0, 2, 0))
+                roomStatus.Text = string.format("Stepped forward toward Room %d", targetRoomNum)
             end
+
+            clearTimerStart = nil
+            task.wait(1.2) -- Allow Roblox to stream in new room
         end
     end
 end
@@ -603,7 +684,7 @@ end)
 
 task.spawn(function()
     while alive and gui.Parent do
-        task.wait(0.25)
+        task.wait(0.2)
         if alive and roomActive then stepRoom() end
     end
 end)
