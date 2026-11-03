@@ -1,27 +1,34 @@
 -- ====================================================================
--- AUTO REBIRTH & STAT ALLOCATION WITH CONTROL UI
+-- AUTO REBIRTH & STAT ALLOCATION (V2 - CONFIRMATION & STATS FIX)
 -- ====================================================================
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
+local GuiService = game:GetService("GuiService")
+local VIM = game:GetService("VirtualInputManager")
+local UserInputService = game:GetService("UserInputService")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- Configuration Targets
-local TARGET_AGILITY = 200   -- Target Lv 200 Shadow Agility
-local TARGET_REACH   = 800   -- Target Lv 800 Shadow Reach
-local CHECK_INTERVAL = 2.0   -- Loop interval in seconds
+-- --------------------------------------------------------------------
+-- Configuration
+-- --------------------------------------------------------------------
+local TARGET_AGILITY = 200   -- Priority 1: 200 Shadow Agility
+local TARGET_REACH   = 800   -- Priority 2: 800 Shadow Reach
+local CHECK_INTERVAL = 2.0   -- Check frequency in seconds
 
--- State Variables
+-- System States
 local AutoRebirthEnabled = true
 local StealthModeEnabled = true
 local isProcessing = false
 
 -- --------------------------------------------------------------------
--- Safe Headless Click Helper (Zero Mouse Movement)
+-- Multi-Layer Safe Click (Zero Cursor Disruption)
 -- --------------------------------------------------------------------
-local function safeClick(btn)
+local function clickGui(btn)
     if not btn then return end
+
+    -- 1. firesignal
     pcall(function()
         if typeof(firesignal) == "function" then
             firesignal(btn.Activated)
@@ -30,46 +37,78 @@ local function safeClick(btn)
             firesignal(btn.MouseButton1Up)
         end
     end)
+
+    -- 2. getconnections
     pcall(function()
         if typeof(getconnections) == "function" then
-            for _, c in ipairs(getconnections(btn.Activated)) do c:Fire() end
-            for _, c in ipairs(getconnections(btn.MouseButton1Click)) do c:Fire() end
-            for _, c in ipairs(getconnections(btn.MouseButton1Down)) do c:Fire() end
-            for _, c in ipairs(getconnections(btn.MouseButton1Up)) do c:Fire() end
+            for _, sig in ipairs({btn.Activated, btn.MouseButton1Click, btn.MouseButton1Down, btn.MouseButton1Up}) do
+                for _, c in ipairs(getconnections(sig)) do
+                    if c.Fire then c:Fire() elseif c.Function then c.Function() end
+                end
+            end
+        end
+    end)
+
+    -- 3. VirtualInputManager fallback (Engine-level input)
+    pcall(function()
+        if btn.AbsoluteSize.X > 0 and btn.AbsolutePosition.X > 0 and btn.AbsolutePosition.Y > 0 then
+            local inset = GuiService:GetGuiInset()
+            local cx = btn.AbsolutePosition.X + (btn.AbsoluteSize.X / 2)
+            local cy = btn.AbsolutePosition.Y + (btn.AbsoluteSize.Y / 2) + inset.Y
+            local origMouse = UserInputService:GetMouseLocation()
+            VIM:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+            task.wait(0.03)
+            VIM:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
+            -- Restore original mouse position immediately
+            VIM:SendMouseMoveEvent(origMouse.X, origMouse.Y, game)
         end
     end)
 end
 
 -- --------------------------------------------------------------------
--- Safe TextBox String Input Helper
+-- Authentic TextBox Submission (Triggers Enter & FocusLost)
 -- --------------------------------------------------------------------
 local function setCustomAmount(box, amount)
     if not box then return end
-    box.Text = tostring(amount)
+    local str = tostring(amount)
+    if box.Text == str then return end
+
+    pcall(function() box:CaptureFocus() end)
+    box.Text = str
+
+    -- Native focus release with enterPressed = true
+    pcall(function() box:ReleaseFocus(true) end)
+
+    -- Simulate Enter key press
     pcall(function()
-        if typeof(firesignal) == "function" then
-            firesignal(box.FocusLost, true)
-        end
+        VIM:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+        task.wait(0.02)
+        VIM:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
     end)
+
+    -- Executor connection fallback
     pcall(function()
+        if typeof(firesignal) == "function" then firesignal(box.FocusLost, true) end
         if typeof(getconnections) == "function" then
-            for _, c in ipairs(getconnections(box.FocusLost)) do c:Fire(true) end
-            for _, c in ipairs(getconnections(box:GetPropertyChangedSignal("Text"))) do c:Fire() end
+            for _, c in ipairs(getconnections(box.FocusLost)) do
+                if c.Fire then c:Fire(true) elseif c.Function then c.Function(true) end
+            end
+            for _, c in ipairs(getconnections(box:GetPropertyChangedSignal("Text"))) do
+                if c.Fire then c:Fire() elseif c.Function then c.Function() end
+            end
         end
     end)
-    task.wait(0.08)
+    task.wait(0.12)
 end
 
 -- --------------------------------------------------------------------
--- Find Stats Window by Content (Spend Your Points)
+-- Locate Stats Window
 -- --------------------------------------------------------------------
 local function findStatsWindow()
     local menus = playerGui:FindFirstChild("Menus") or playerGui:FindFirstChild("__Disable")
     if menus then
         for _, m in ipairs(menus:GetChildren()) do
-            if string.find(string.lower(m.Name), "stat") then
-                return m
-            end
+            if string.find(string.lower(m.Name), "stat") then return m end
         end
     end
 
@@ -94,7 +133,7 @@ local function findStatsWindow()
 end
 
 -- --------------------------------------------------------------------
--- Find HUD 'Stats' Hex Button
+-- Locate HUD 'Stats' Hex Button
 -- --------------------------------------------------------------------
 local function getHudStatsButton()
     for _, desc in ipairs(playerGui:GetDescendants()) do
@@ -103,14 +142,14 @@ local function getHudStatsButton()
             clean = string.gsub(clean, "%s+", "")
             if clean == "STATS" then
                 local p = desc.Parent
-                local isInsideWindow = false
+                local isInside = false
                 while p and p ~= playerGui do
                     if p.Name and string.find(string.lower(p.Name), "stat") then
-                        isInsideWindow = true; break
+                        isInside = true; break
                     end
                     p = p.Parent
                 end
-                if not isInsideWindow then
+                if not isInside then
                     local btn = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
                     if btn and btn.Visible then return btn end
                 end
@@ -126,7 +165,7 @@ end
 local function getAvailablePoints(win)
     if not win then return 0 end
 
-    -- Primary: Read Diamond counter near "POINTS TO SPEND"
+    -- Primary: Diamond counter
     for _, desc in ipairs(win:GetDescendants()) do
         if desc:IsA("TextLabel") and desc.Text and string.find(string.upper(desc.Text), "POINTS TO SPEND", 1, true) then
             local parent = desc.Parent
@@ -144,7 +183,7 @@ local function getAvailablePoints(win)
         end
     end
 
-    -- Fallback: Earned - Spent
+    -- Mathematical fallback: Earned - Spent
     local earned, spent = nil, nil
     for _, desc in ipairs(win:GetDescendants()) do
         if desc:IsA("TextLabel") and desc.Text then
@@ -166,20 +205,57 @@ local function getAvailablePoints(win)
 end
 
 -- --------------------------------------------------------------------
--- Find Custom Amount TextBox (near Talents/x1/x10/x100)
+-- Locate Custom Amount TextBox
 -- --------------------------------------------------------------------
 local function getCustomBox(win)
     if not win then return nil end
     for _, desc in ipairs(win:GetDescendants()) do
-        if desc:IsA("TextBox") then
-            return desc
-        end
+        if desc:IsA("TextBox") then return desc end
     end
     return nil
 end
 
 -- --------------------------------------------------------------------
--- Extract Stat Row Info (Button, Current Lv, Max Lv, IsMax)
+-- Locate the Add (+) Button Inside a Row (Far Right Only)
+-- --------------------------------------------------------------------
+local function findAddButtonInRow(row)
+    local candidates = {}
+    for _, desc in ipairs(row:GetDescendants()) do
+        if desc:IsA("GuiButton") and desc.Visible then
+            local text = ""
+            if desc:IsA("TextButton") then
+                text = desc.Text
+            else
+                for _, ch in ipairs(desc:GetChildren()) do
+                    if ch:IsA("TextLabel") and ch.Text then
+                        text = ch.Text; break
+                    end
+                end
+            end
+
+            local isPlusOrMax = string.find(text, "+") or string.find(string.upper(text), "MAX")
+            table.insert(candidates, {
+                button = desc,
+                isPlusOrMax = isPlusOrMax,
+                x = desc.AbsolutePosition.X
+            })
+        end
+    end
+
+    -- 1. Prioritize button containing '+' or 'MAX'
+    for _, cand in ipairs(candidates) do
+        if cand.isPlusOrMax then return cand.button end
+    end
+
+    -- 2. Fallback: Rightmost button in the row
+    table.sort(candidates, function(a, b) return a.x > b.x end)
+    if #candidates > 0 then return candidates[1].button end
+
+    return nil
+end
+
+-- --------------------------------------------------------------------
+-- Extract Stat Row Data (Button, Current Lv, Max Lv, IsMax)
 -- --------------------------------------------------------------------
 local function getStatRow(win, statName)
     local target = string.upper(statName)
@@ -191,7 +267,6 @@ local function getStatRow(win, statName)
                 local depth = 0
                 while row and row ~= win and depth < 5 do
                     local hasLv, curLv, maxLv = false, 0, 2850
-                    local addBtn = nil
                     local isMax = false
 
                     for _, child in ipairs(row:GetDescendants()) do
@@ -210,14 +285,12 @@ local function getStatRow(win, statName)
                                 isMax = true
                             end
                         end
-                        if child:IsA("GuiButton") and child.Visible then
-                            addBtn = child
-                            if child:IsA("TextButton") and string.find(string.upper(child.Text), "MAX") then
-                                isMax = true
-                            end
+                        if child:IsA("TextButton") and string.find(string.upper(child.Text), "MAX") then
+                            isMax = true
                         end
                     end
 
+                    local addBtn = findAddButtonInRow(row)
                     if hasLv and addBtn then
                         return {
                             button = addBtn,
@@ -237,9 +310,23 @@ local function getStatRow(win, statName)
 end
 
 -- --------------------------------------------------------------------
--- Rebirth Detection & Confirmation
+-- Rebirth Detection & Confirmation Handling
 -- --------------------------------------------------------------------
-local function checkAndTriggerRebirth(win)
+local function findConfirmationYesButton()
+    for _, desc in ipairs(playerGui:GetDescendants()) do
+        if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Visible then
+            local clean = string.upper(string.gsub(desc.Text, "[^%a]", ""))
+            -- Strictly match confirmation words (NEVER match "REBIRTH")
+            if clean == "YES" or clean == "CONFIRM" or clean == "ACCEPT" then
+                local btn = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
+                if btn and btn.Visible then return btn end
+            end
+        end
+    end
+    return nil
+end
+
+local function checkAndTriggerRebirth(win, updateStatus)
     local rebirthBtn = nil
     for _, desc in ipairs(win:GetDescendants()) do
         if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Visible then
@@ -255,29 +342,42 @@ local function checkAndTriggerRebirth(win)
     end
 
     if rebirthBtn then
-        safeClick(rebirthBtn)
-        task.wait(0.35)
+        updateStatus("Clicking REBIRTH...", Color3.fromRGB(241, 196, 15))
+        clickGui(rebirthBtn)
 
-        for _, d in ipairs(playerGui:GetDescendants()) do
-            if (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text and d.Visible then
-                local u = string.upper(string.gsub(d.Text, "%s+", ""))
-                if u == "YES" or u == "CONFIRM" or u == "REBIRTH" or u == "OK" then
-                    local cb = d:IsA("GuiButton") and d or d:FindFirstAncestorWhichIsA("GuiButton")
-                    if cb and cb.Visible then
-                        safeClick(cb)
-                        task.wait(0.5)
-                        return true
-                    end
-                end
-            end
+        -- Search for the "YES" confirmation button (poll up to 5 times)
+        local yesBtn = nil
+        for _ = 1, 5 do
+            task.wait(0.3)
+            yesBtn = findConfirmationYesButton()
+            if yesBtn then break end
         end
-        return true
+
+        if yesBtn then
+            updateStatus("Confirming YES...", Color3.fromRGB(46, 204, 113))
+            clickGui(yesBtn)
+            task.wait(0.4)
+
+            -- Retry once if confirmation dialog is still present
+            local retryYes = findConfirmationYesButton()
+            if retryYes then
+                clickGui(retryYes)
+                task.wait(0.4)
+            end
+
+            updateStatus("Rebirth Complete! Resetting...", Color3.fromRGB(46, 204, 113))
+            task.wait(1.0)
+            return true
+        else
+            updateStatus("Rebirth clicked (no popup appeared)", Color3.fromRGB(230, 126, 34))
+            return true
+        end
     end
     return false
 end
 
 -- --------------------------------------------------------------------
--- Main Allocation & Rebirth Execution Cycle
+-- Main Automation Loop
 -- --------------------------------------------------------------------
 local function runAutomationCycle(updateStatus)
     if isProcessing then return end
@@ -289,29 +389,28 @@ local function runAutomationCycle(updateStatus)
         local openedByScript = false
         local originalPos = nil
 
-        -- Open window headlessly if closed
+        -- Open window if currently closed
         if (not win or not win.Visible) and hudBtn then
             openedByScript = true
-            safeClick(hudBtn)
-            task.wait(0.3)
+            clickGui(hudBtn)
+            task.wait(0.35)
             win = findStatsWindow()
         end
 
         if not win then
-            updateStatus("Waiting for Stats UI...", Color3.fromRGB(241, 196, 15))
+            updateStatus("Stats UI not found", Color3.fromRGB(241, 196, 15))
             return
         end
 
-        -- Keep off-screen if Stealth Mode is ON
+        -- Keep off-screen if Stealth Mode is enabled
         if openedByScript and StealthModeEnabled and win:IsA("GuiObject") then
             originalPos = win.Position
             win.Position = UDim2.fromOffset(-9999, -9999)
         end
 
-        -- 1. Check & Trigger Rebirth if Max Level reached
-        local didRebirth = checkAndTriggerRebirth(win)
+        -- 1. Rebirth Check
+        local didRebirth = checkAndTriggerRebirth(win, updateStatus)
         if didRebirth then
-            updateStatus("Rebirth Executed! Confirming...", Color3.fromRGB(46, 204, 113))
             task.wait(0.8)
         end
 
@@ -322,7 +421,7 @@ local function runAutomationCycle(updateStatus)
         if points > 0 and customBox then
             updateStatus(string.format("Points to spend: %d", points), Color3.fromRGB(52, 152, 219))
 
-            -- Priority 1: Shadow Agility (Target: 200)
+            -- Priority 1: Shadow Agility (Target 200)
             local agi = getStatRow(win, "Shadow Agility")
             if agi and not agi.isMax and agi.current < TARGET_AGILITY then
                 local needed = TARGET_AGILITY - agi.current
@@ -330,13 +429,15 @@ local function runAutomationCycle(updateStatus)
                 if toSpend > 0 then
                     updateStatus(string.format("Adding %d to Agility (%d/%d)...", toSpend, agi.current, TARGET_AGILITY), Color3.fromRGB(46, 204, 113))
                     setCustomAmount(customBox, toSpend)
-                    safeClick(agi.button)
-                    task.wait(0.18)
-                    points = points - toSpend
+                    task.wait(0.1)
+                    local freshAgi = getStatRow(win, "Shadow Agility")
+                    if freshAgi and freshAgi.button then clickGui(freshAgi.button) end
+                    task.wait(0.2)
+                    points = getAvailablePoints(win)
                 end
             end
 
-            -- Priority 2: Shadow Reach (Target: 800)
+            -- Priority 2: Shadow Reach (Target 800)
             if points > 0 then
                 local rch = getStatRow(win, "Shadow Reach")
                 if rch and not rch.isMax and rch.current < TARGET_REACH then
@@ -345,14 +446,16 @@ local function runAutomationCycle(updateStatus)
                     if toSpend > 0 then
                         updateStatus(string.format("Adding %d to Reach (%d/%d)...", toSpend, rch.current, TARGET_REACH), Color3.fromRGB(46, 204, 113))
                         setCustomAmount(customBox, toSpend)
-                        safeClick(rch.button)
-                        task.wait(0.18)
-                        points = points - toSpend
+                        task.wait(0.1)
+                        local freshRch = getStatRow(win, "Shadow Reach")
+                        if freshRch and freshRch.button then clickGui(freshRch.button) end
+                        task.wait(0.2)
+                        points = getAvailablePoints(win)
                     end
                 end
             end
 
-            -- Priority 3: Player Experience (Target: MAX)
+            -- Priority 3: Player Experience (Target MAX)
             if points > 0 then
                 local exp = getStatRow(win, "Player Experience")
                 if exp and not exp.isMax and exp.current < exp.max then
@@ -361,28 +464,32 @@ local function runAutomationCycle(updateStatus)
                     if toSpend > 0 then
                         updateStatus(string.format("Adding %d to Player Exp (%d/%d)...", toSpend, exp.current, exp.max), Color3.fromRGB(46, 204, 113))
                         setCustomAmount(customBox, toSpend)
-                        safeClick(exp.button)
-                        task.wait(0.18)
-                        points = points - toSpend
+                        task.wait(0.1)
+                        local freshExp = getStatRow(win, "Player Experience")
+                        if freshExp and freshExp.button then clickGui(freshExp.button) end
+                        task.wait(0.2)
+                        points = getAvailablePoints(win)
                     end
                 end
             end
 
-            -- Overflow: If Player Exp is MAX, add remaining points into Shadow Reach
+            -- Overflow: Feed remaining points into Shadow Reach
             if points > 0 then
                 local exp = getStatRow(win, "Player Experience")
                 if exp and (exp.isMax or exp.current >= exp.max) then
                     local rch = getStatRow(win, "Shadow Reach")
                     if rch and not rch.isMax and rch.current < rch.max then
-                        updateStatus(string.format("Exp MAX! Dumping %d overflow to Reach...", points), Color3.fromRGB(155, 89, 182))
+                        updateStatus(string.format("Exp MAX! Adding %d overflow to Reach...", points), Color3.fromRGB(155, 89, 182))
                         setCustomAmount(customBox, points)
-                        safeClick(rch.button)
-                        task.wait(0.18)
+                        task.wait(0.1)
+                        local freshRch = getStatRow(win, "Shadow Reach")
+                        if freshRch and freshRch.button then clickGui(freshRch.button) end
+                        task.wait(0.2)
                     end
                 end
             end
         else
-            updateStatus("Active (Monitoring Level & Stats)", Color3.fromRGB(230, 230, 230))
+            updateStatus("Active (Points: 0 | Monitoring)", Color3.fromRGB(230, 230, 230))
         end
 
         -- Clean up window
@@ -392,7 +499,7 @@ local function runAutomationCycle(updateStatus)
             end
             for _, d in ipairs(win:GetDescendants()) do
                 if d:IsA("GuiButton") and (d.Name == "Close" or (d:IsA("TextButton") and d.Text == "X")) then
-                    safeClick(d)
+                    clickGui(d)
                     break
                 end
             end
@@ -431,8 +538,8 @@ local function createUI()
     -- Main Container
     local MainFrame = Instance.new("Frame")
     MainFrame.Name = "MainFrame"
-    MainFrame.Size = UDim2.fromOffset(260, 205)
-    MainFrame.Position = UDim2.fromOffset(40, 160)
+    MainFrame.Size = UDim2.fromOffset(265, 210)
+    MainFrame.Position = UDim2.fromOffset(35, 150)
     MainFrame.BackgroundColor3 = Color3.fromRGB(18, 22, 34)
     MainFrame.BorderSizePixel = 0
     MainFrame.Active = true
@@ -446,7 +553,7 @@ local function createUI()
     MainStroke.Color = Color3.fromRGB(45, 95, 175)
     MainStroke.Thickness = 1.5
 
-    -- Header
+    -- Title Bar
     local TitleBar = Instance.new("Frame", MainFrame)
     TitleBar.Size = UDim2.new(1, 0, 0, 32)
     TitleBar.BackgroundColor3 = Color3.fromRGB(25, 32, 50)
@@ -493,7 +600,7 @@ local function createUI()
         if color then StatusLabel.TextColor3 = color end
     end
 
-    -- Toggle Button (Master ON / OFF)
+    -- Master ON / OFF Toggle Button
     local ToggleBtn = Instance.new("TextButton", MainFrame)
     ToggleBtn.Size = UDim2.new(1, -20, 0, 34)
     ToggleBtn.Position = UDim2.fromOffset(10, 68)
@@ -521,7 +628,7 @@ local function createUI()
         updateToggleBtnVisual()
     end)
 
-    -- Stealth Mode Button (Window Hide/Show)
+    -- Stealth Mode Toggle Button
     local StealthBtn = Instance.new("TextButton", MainFrame)
     StealthBtn.Size = UDim2.new(1, -20, 0, 26)
     StealthBtn.Position = UDim2.fromOffset(10, 108)
@@ -566,10 +673,10 @@ local function createUI()
         end)
     end)
 
-    -- Target Rules Summary Line
+    -- Target Rules Summary
     local TargetLabel = Instance.new("TextLabel", MainFrame)
     TargetLabel.Size = UDim2.new(1, -20, 0, 20)
-    TargetLabel.Position = UDim2.fromOffset(10, 175)
+    TargetLabel.Position = UDim2.fromOffset(10, 178)
     TargetLabel.BackgroundTransparency = 1
     TargetLabel.Font = Enum.Font.Gotham
     TargetLabel.Text = "Agi: 200  |  Reach: 800  |  Exp: MAX"
@@ -589,6 +696,6 @@ local function createUI()
     end)
 end
 
--- Launch the System
+-- Launch
 createUI()
-print("[Auto-Rebirth] System & UI loaded successfully!")
+print("[Auto-Rebirth] V2 loaded successfully!")
