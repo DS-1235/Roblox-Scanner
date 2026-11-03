@@ -1,5 +1,5 @@
 -- ====================================================================
--- AUTO REBIRTH & STAT ALLOCATION (V2 - CONFIRMATION & STATS FIX)
+-- AUTO REBIRTH & STAT ALLOCATION (V3 - REAL-TIME STATS & CLOSED-UI FIX)
 -- ====================================================================
 
 local Players = game:GetService("Players")
@@ -11,7 +11,7 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- --------------------------------------------------------------------
--- Configuration
+-- Configuration Targets
 -- --------------------------------------------------------------------
 local TARGET_AGILITY = 200   -- Priority 1: 200 Shadow Agility
 local TARGET_REACH   = 800   -- Priority 2: 800 Shadow Reach
@@ -19,16 +19,16 @@ local CHECK_INTERVAL = 2.0   -- Check frequency in seconds
 
 -- System States
 local AutoRebirthEnabled = true
-local StealthModeEnabled = true
-local isProcessing = false
+local AutoCloseEnabled   = true
+local isProcessing       = false
 
 -- --------------------------------------------------------------------
--- Multi-Layer Safe Click (Zero Cursor Disruption)
+-- Multi-Layer Safe Click Helper
 -- --------------------------------------------------------------------
 local function clickGui(btn)
     if not btn then return end
 
-    -- 1. firesignal
+    -- Layer 1: firesignal
     pcall(function()
         if typeof(firesignal) == "function" then
             firesignal(btn.Activated)
@@ -38,7 +38,7 @@ local function clickGui(btn)
         end
     end)
 
-    -- 2. getconnections
+    -- Layer 2: getconnections
     pcall(function()
         if typeof(getconnections) == "function" then
             for _, sig in ipairs({btn.Activated, btn.MouseButton1Click, btn.MouseButton1Down, btn.MouseButton1Up}) do
@@ -49,7 +49,7 @@ local function clickGui(btn)
         end
     end)
 
-    -- 3. VirtualInputManager fallback (Engine-level input)
+    -- Layer 3: VirtualInputManager (Engine-level input)
     pcall(function()
         if btn.AbsoluteSize.X > 0 and btn.AbsolutePosition.X > 0 and btn.AbsolutePosition.Y > 0 then
             local inset = GuiService:GetGuiInset()
@@ -59,14 +59,13 @@ local function clickGui(btn)
             VIM:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
             task.wait(0.03)
             VIM:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
-            -- Restore original mouse position immediately
             VIM:SendMouseMoveEvent(origMouse.X, origMouse.Y, game)
         end
     end)
 end
 
 -- --------------------------------------------------------------------
--- Authentic TextBox Submission (Triggers Enter & FocusLost)
+-- Authentic TextBox Submission (Captures Focus, Sets Text, Submits Enter)
 -- --------------------------------------------------------------------
 local function setCustomAmount(box, amount)
     if not box then return end
@@ -75,18 +74,14 @@ local function setCustomAmount(box, amount)
 
     pcall(function() box:CaptureFocus() end)
     box.Text = str
-
-    -- Native focus release with enterPressed = true
     pcall(function() box:ReleaseFocus(true) end)
 
-    -- Simulate Enter key press
     pcall(function()
         VIM:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
         task.wait(0.02)
         VIM:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
     end)
 
-    -- Executor connection fallback
     pcall(function()
         if typeof(firesignal) == "function" then firesignal(box.FocusLost, true) end
         if typeof(getconnections) == "function" then
@@ -102,7 +97,24 @@ local function setCustomAmount(box, amount)
 end
 
 -- --------------------------------------------------------------------
--- Locate Stats Window
+-- Check if an element is inside the Stats Window
+-- --------------------------------------------------------------------
+local function isInsideStatsWindow(obj)
+    local p = obj.Parent
+    while p and p ~= playerGui do
+        if p.Name == "UI_Stats" or p.Name == "StatsWindow" then return true end
+        for _, ch in ipairs(p:GetChildren()) do
+            if ch:IsA("TextLabel") and ch.Text and string.find(string.upper(ch.Text), "SPEND YOUR POINTS", 1, true) then
+                return true
+            end
+        end
+        p = p.Parent
+    end
+    return false
+end
+
+-- --------------------------------------------------------------------
+-- Locate the Stats Window Frame
 -- --------------------------------------------------------------------
 local function findStatsWindow()
     local menus = playerGui:FindFirstChild("Menus") or playerGui:FindFirstChild("__Disable")
@@ -133,7 +145,7 @@ local function findStatsWindow()
 end
 
 -- --------------------------------------------------------------------
--- Locate HUD 'Stats' Hex Button
+-- Locate the Hexagonal HUD 'Stats' Button
 -- --------------------------------------------------------------------
 local function getHudStatsButton()
     for _, desc in ipairs(playerGui:GetDescendants()) do
@@ -141,17 +153,11 @@ local function getHudStatsButton()
             local clean = string.upper(string.gsub(desc.Text, "<[^>]+>", ""))
             clean = string.gsub(clean, "%s+", "")
             if clean == "STATS" then
-                local p = desc.Parent
-                local isInside = false
-                while p and p ~= playerGui do
-                    if p.Name and string.find(string.lower(p.Name), "stat") then
-                        isInside = true; break
-                    end
-                    p = p.Parent
-                end
-                if not isInside then
+                if not isInsideStatsWindow(desc) then
                     local btn = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
-                    if btn and btn.Visible then return btn end
+                    if btn and btn.Visible and btn.AbsolutePosition.X > 0 and btn.AbsolutePosition.Y > 0 then
+                        return btn
+                    end
                 end
             end
         end
@@ -216,7 +222,7 @@ local function getCustomBox(win)
 end
 
 -- --------------------------------------------------------------------
--- Locate the Add (+) Button Inside a Row (Far Right Only)
+-- Locate the Add (+) Button (Far Right Only)
 -- --------------------------------------------------------------------
 local function findAddButtonInRow(row)
     local candidates = {}
@@ -242,15 +248,12 @@ local function findAddButtonInRow(row)
         end
     end
 
-    -- 1. Prioritize button containing '+' or 'MAX'
     for _, cand in ipairs(candidates) do
         if cand.isPlusOrMax then return cand.button end
     end
 
-    -- 2. Fallback: Rightmost button in the row
     table.sort(candidates, function(a, b) return a.x > b.x end)
     if #candidates > 0 then return candidates[1].button end
-
     return nil
 end
 
@@ -266,7 +269,7 @@ local function getStatRow(win, statName)
                 local row = desc.Parent
                 local depth = 0
                 while row and row ~= win and depth < 5 do
-                    local hasLv, curLv, maxLv = false, 0, 2850
+                    local hasLv, curLv, maxLv = false, 0, 3075
                     local isMax = false
 
                     for _, child in ipairs(row:GetDescendants()) do
@@ -278,7 +281,7 @@ local function getStatRow(win, statName)
                                 local cur, mx = string.match(c, "(%d+)%s*/%s*(%d+)")
                                 if cur and mx then
                                     curLv = tonumber(cur) or 0
-                                    maxLv = tonumber(mx) or 2850
+                                    maxLv = tonumber(mx) or 3075
                                 end
                             end
                             if string.find(t, "MAX") and not string.find(t, "PER STAT") then
@@ -310,13 +313,12 @@ local function getStatRow(win, statName)
 end
 
 -- --------------------------------------------------------------------
--- Rebirth Detection & Confirmation Handling
+-- Rebirth Detection & Confirmation
 -- --------------------------------------------------------------------
 local function findConfirmationYesButton()
     for _, desc in ipairs(playerGui:GetDescendants()) do
         if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Visible then
             local clean = string.upper(string.gsub(desc.Text, "[^%a]", ""))
-            -- Strictly match confirmation words (NEVER match "REBIRTH")
             if clean == "YES" or clean == "CONFIRM" or clean == "ACCEPT" then
                 local btn = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
                 if btn and btn.Visible then return btn end
@@ -345,9 +347,8 @@ local function checkAndTriggerRebirth(win, updateStatus)
         updateStatus("Clicking REBIRTH...", Color3.fromRGB(241, 196, 15))
         clickGui(rebirthBtn)
 
-        -- Search for the "YES" confirmation button (poll up to 5 times)
         local yesBtn = nil
-        for _ = 1, 5 do
+        for _ = 1, 6 do
             task.wait(0.3)
             yesBtn = findConfirmationYesButton()
             if yesBtn then break end
@@ -358,7 +359,6 @@ local function checkAndTriggerRebirth(win, updateStatus)
             clickGui(yesBtn)
             task.wait(0.4)
 
-            -- Retry once if confirmation dialog is still present
             local retryYes = findConfirmationYesButton()
             if retryYes then
                 clickGui(retryYes)
@@ -368,16 +368,18 @@ local function checkAndTriggerRebirth(win, updateStatus)
             updateStatus("Rebirth Complete! Resetting...", Color3.fromRGB(46, 204, 113))
             task.wait(1.0)
             return true
-        else
-            updateStatus("Rebirth clicked (no popup appeared)", Color3.fromRGB(230, 126, 34))
-            return true
         end
     end
     return false
 end
 
 -- --------------------------------------------------------------------
--- Main Automation Loop
+-- Forward References for UI
+-- --------------------------------------------------------------------
+local updateLiveStatsWidget = nil
+
+-- --------------------------------------------------------------------
+-- Main Automation Cycle
 -- --------------------------------------------------------------------
 local function runAutomationCycle(updateStatus)
     if isProcessing then return end
@@ -385,33 +387,35 @@ local function runAutomationCycle(updateStatus)
 
     local success, err = pcall(function()
         local win = findStatsWindow()
-        local hudBtn = getHudStatsButton()
         local openedByScript = false
-        local originalPos = nil
 
-        -- Open window if currently closed
-        if (not win or not win.Visible) and hudBtn then
-            openedByScript = true
-            clickGui(hudBtn)
-            task.wait(0.35)
-            win = findStatsWindow()
+        -- If the window is currently closed, locate HUD button and open it
+        if not win or not win.Visible then
+            local hudBtn = getHudStatsButton()
+            if hudBtn then
+                openedByScript = true
+                updateStatus("Opening Stats window...", Color3.fromRGB(52, 152, 219))
+                clickGui(hudBtn)
+                task.wait(0.4)
+                win = findStatsWindow()
+            end
         end
 
-        if not win then
-            updateStatus("Stats UI not found", Color3.fromRGB(241, 196, 15))
+        if not win or not win.Visible then
+            updateStatus("Waiting for Stats HUD...", Color3.fromRGB(241, 196, 15))
             return
         end
 
-        -- Keep off-screen if Stealth Mode is enabled
-        if openedByScript and StealthModeEnabled and win:IsA("GuiObject") then
-            originalPos = win.Position
-            win.Position = UDim2.fromOffset(-9999, -9999)
+        -- Refresh Live Stats Widget immediately with actual numbers
+        if updateLiveStatsWidget then
+            updateLiveStatsWidget(win)
         end
 
         -- 1. Rebirth Check
         local didRebirth = checkAndTriggerRebirth(win, updateStatus)
         if didRebirth then
             task.wait(0.8)
+            if updateLiveStatsWidget then updateLiveStatsWidget(win) end
         end
 
         -- 2. Read Points & Custom TextBox
@@ -419,7 +423,7 @@ local function runAutomationCycle(updateStatus)
         local customBox = getCustomBox(win)
 
         if points > 0 and customBox then
-            updateStatus(string.format("Points to spend: %d", points), Color3.fromRGB(52, 152, 219))
+            updateStatus(string.format("Spending %d points...", points), Color3.fromRGB(52, 152, 219))
 
             -- Priority 1: Shadow Agility (Target 200)
             local agi = getStatRow(win, "Shadow Agility")
@@ -434,6 +438,7 @@ local function runAutomationCycle(updateStatus)
                     if freshAgi and freshAgi.button then clickGui(freshAgi.button) end
                     task.wait(0.2)
                     points = getAvailablePoints(win)
+                    if updateLiveStatsWidget then updateLiveStatsWidget(win) end
                 end
             end
 
@@ -451,6 +456,7 @@ local function runAutomationCycle(updateStatus)
                         if freshRch and freshRch.button then clickGui(freshRch.button) end
                         task.wait(0.2)
                         points = getAvailablePoints(win)
+                        if updateLiveStatsWidget then updateLiveStatsWidget(win) end
                     end
                 end
             end
@@ -469,6 +475,7 @@ local function runAutomationCycle(updateStatus)
                         if freshExp and freshExp.button then clickGui(freshExp.button) end
                         task.wait(0.2)
                         points = getAvailablePoints(win)
+                        if updateLiveStatsWidget then updateLiveStatsWidget(win) end
                     end
                 end
             end
@@ -485,6 +492,7 @@ local function runAutomationCycle(updateStatus)
                         local freshRch = getStatRow(win, "Shadow Reach")
                         if freshRch and freshRch.button then clickGui(freshRch.button) end
                         task.wait(0.2)
+                        if updateLiveStatsWidget then updateLiveStatsWidget(win) end
                     end
                 end
             end
@@ -492,11 +500,9 @@ local function runAutomationCycle(updateStatus)
             updateStatus("Active (Points: 0 | Monitoring)", Color3.fromRGB(230, 230, 230))
         end
 
-        -- Clean up window
-        if openedByScript then
-            if originalPos and win:IsA("GuiObject") then
-                win.Position = originalPos
-            end
+        -- Clean up: Close window only if opened by script AND AutoClose is ON
+        if openedByScript and AutoCloseEnabled then
+            task.wait(0.15)
             for _, d in ipairs(win:GetDescendants()) do
                 if d:IsA("GuiButton") and (d.Name == "Close" or (d:IsA("TextButton") and d.Text == "X")) then
                     clickGui(d)
@@ -513,7 +519,7 @@ local function runAutomationCycle(updateStatus)
 end
 
 -- ====================================================================
--- CONTROL UI CREATION
+-- CONTROL UI CREATION (WITH LIVE STAT DASHBOARD)
 -- ====================================================================
 
 local function createUI()
@@ -535,11 +541,11 @@ local function createUI()
     ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     ScreenGui.Parent = guiParent
 
-    -- Main Container
+    -- Main Container Frame
     local MainFrame = Instance.new("Frame")
     MainFrame.Name = "MainFrame"
-    MainFrame.Size = UDim2.fromOffset(265, 210)
-    MainFrame.Position = UDim2.fromOffset(35, 150)
+    MainFrame.Size = UDim2.fromOffset(275, 275)
+    MainFrame.Position = UDim2.fromOffset(35, 140)
     MainFrame.BackgroundColor3 = Color3.fromRGB(18, 22, 34)
     MainFrame.BorderSizePixel = 0
     MainFrame.Active = true
@@ -585,8 +591,8 @@ local function createUI()
 
     -- Status Label
     local StatusLabel = Instance.new("TextLabel", MainFrame)
-    StatusLabel.Size = UDim2.new(1, -20, 0, 24)
-    StatusLabel.Position = UDim2.fromOffset(10, 38)
+    StatusLabel.Size = UDim2.new(1, -20, 0, 22)
+    StatusLabel.Position = UDim2.fromOffset(10, 36)
     StatusLabel.BackgroundTransparency = 1
     StatusLabel.Font = Enum.Font.GothamMedium
     StatusLabel.Text = "Status: Initializing..."
@@ -600,14 +606,99 @@ local function createUI()
         if color then StatusLabel.TextColor3 = color end
     end
 
+    -- Live Stats Dashboard Box
+    local StatsCard = Instance.new("Frame", MainFrame)
+    StatsCard.Size = UDim2.new(1, -20, 0, 72)
+    StatsCard.Position = UDim2.fromOffset(10, 60)
+    StatsCard.BackgroundColor3 = Color3.fromRGB(12, 15, 24)
+    local CardCorner = Instance.new("UICorner", StatsCard)
+    CardCorner.CornerRadius = UDim.new(0, 6)
+    local CardStroke = Instance.new("UIStroke", StatsCard)
+    CardStroke.Color = Color3.fromRGB(35, 50, 75)
+    CardStroke.Thickness = 1
+
+    -- Row 1: Points & Agility
+    local PointsText = Instance.new("TextLabel", StatsCard)
+    PointsText.Size = UDim2.new(0.5, -8, 0, 16)
+    PointsText.Position = UDim2.fromOffset(8, 4)
+    PointsText.BackgroundTransparency = 1
+    PointsText.Font = Enum.Font.GothamSemibold
+    PointsText.Text = "Points: 0"
+    PointsText.TextColor3 = Color3.fromRGB(241, 196, 15)
+    PointsText.TextSize = 10
+    PointsText.TextXAlignment = Enum.TextXAlignment.Left
+
+    local AgiText = Instance.new("TextLabel", StatsCard)
+    AgiText.Size = UDim2.new(0.5, -8, 0, 16)
+    AgiText.Position = UDim2.new(0.5, 0, 0, 4)
+    AgiText.BackgroundTransparency = 1
+    AgiText.Font = Enum.Font.GothamSemibold
+    AgiText.Text = "Agility: 0 / 200"
+    AgiText.TextColor3 = Color3.fromRGB(46, 204, 113)
+    AgiText.TextSize = 10
+    AgiText.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Row 2: Reach
+    local ReachText = Instance.new("TextLabel", StatsCard)
+    ReachText.Size = UDim2.new(1, -16, 0, 16)
+    ReachText.Position = UDim2.fromOffset(8, 26)
+    ReachText.BackgroundTransparency = 1
+    ReachText.Font = Enum.Font.GothamSemibold
+    ReachText.Text = "Reach: 0 / 800"
+    ReachText.TextColor3 = Color3.fromRGB(52, 152, 219)
+    ReachText.TextSize = 10
+    ReachText.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Row 3: Player Experience
+    local ExpText = Instance.new("TextLabel", StatsCard)
+    ExpText.Size = UDim2.new(1, -16, 0, 16)
+    ExpText.Position = UDim2.fromOffset(8, 48)
+    ExpText.BackgroundTransparency = 1
+    ExpText.Font = Enum.Font.GothamBold
+    ExpText.Text = "Player Exp: 0 / 3,075"
+    ExpText.TextColor3 = Color3.fromRGB(230, 230, 230)
+    ExpText.TextSize = 10
+    ExpText.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Live Stats Updater Implementation
+    updateLiveStatsWidget = function(win)
+        if not win then return end
+        local pts = getAvailablePoints(win)
+        local agi = getStatRow(win, "Shadow Agility")
+        local rch = getStatRow(win, "Shadow Reach")
+        local exp = getStatRow(win, "Player Experience")
+
+        PointsText.Text = string.format("Points: %s", tostring(pts))
+
+        if agi then
+            AgiText.Text = string.format("Agility: %s / %s", tostring(agi.current), tostring(TARGET_AGILITY))
+            AgiText.TextColor3 = (agi.current >= TARGET_AGILITY) and Color3.fromRGB(46, 204, 113) or Color3.fromRGB(241, 196, 15)
+        end
+
+        if rch then
+            ReachText.Text = string.format("Reach: %s / %s", tostring(rch.current), tostring(TARGET_REACH))
+            ReachText.TextColor3 = (rch.current >= TARGET_REACH) and Color3.fromRGB(52, 152, 219) or Color3.fromRGB(241, 196, 15)
+        end
+
+        if exp then
+            if exp.isMax or (exp.max > 0 and exp.current >= exp.max) then
+                ExpText.Text = string.format("Player Exp: MAX (%s)", tostring(exp.max))
+                ExpText.TextColor3 = Color3.fromRGB(46, 204, 113)
+            else
+                ExpText.Text = string.format("Player Exp: %s / %s", tostring(exp.current), tostring(exp.max))
+                ExpText.TextColor3 = Color3.fromRGB(230, 230, 230)
+            end
+        end
+    end
+
     -- Master ON / OFF Toggle Button
     local ToggleBtn = Instance.new("TextButton", MainFrame)
-    ToggleBtn.Size = UDim2.new(1, -20, 0, 34)
-    ToggleBtn.Position = UDim2.fromOffset(10, 68)
+    ToggleBtn.Size = UDim2.new(1, -20, 0, 32)
+    ToggleBtn.Position = UDim2.fromOffset(10, 140)
     ToggleBtn.Font = Enum.Font.GothamBold
-    ToggleBtn.TextSize = 13
+    ToggleBtn.TextSize = 12
     local ToggleCorner = Instance.new("UICorner", ToggleBtn)
-    ToggleCorner.CornerRadius = UDim.new(0, 7)
+    ToggleCorner.CornerRadius = UDim.new(0, 6)
 
     local function updateToggleBtnVisual()
         if AutoRebirthEnabled then
@@ -628,37 +719,37 @@ local function createUI()
         updateToggleBtnVisual()
     end)
 
-    -- Stealth Mode Toggle Button
-    local StealthBtn = Instance.new("TextButton", MainFrame)
-    StealthBtn.Size = UDim2.new(1, -20, 0, 26)
-    StealthBtn.Position = UDim2.fromOffset(10, 108)
-    StealthBtn.Font = Enum.Font.GothamSemibold
-    StealthBtn.TextSize = 11
-    local StealthCorner = Instance.new("UICorner", StealthBtn)
-    StealthCorner.CornerRadius = UDim.new(0, 6)
+    -- Auto-Close Window Toggle Button
+    local AutoCloseBtn = Instance.new("TextButton", MainFrame)
+    AutoCloseBtn.Size = UDim2.new(1, -20, 0, 26)
+    AutoCloseBtn.Position = UDim2.fromOffset(10, 178)
+    AutoCloseBtn.Font = Enum.Font.GothamSemibold
+    AutoCloseBtn.TextSize = 11
+    local AutoCloseCorner = Instance.new("UICorner", AutoCloseBtn)
+    AutoCloseCorner.CornerRadius = UDim.new(0, 6)
 
-    local function updateStealthBtnVisual()
-        if StealthModeEnabled then
-            StealthBtn.Text = "Stealth Mode: ON (Hidden UI)"
-            StealthBtn.BackgroundColor3 = Color3.fromRGB(41, 128, 185)
-            StealthBtn.TextColor3 = Color3.new(1, 1, 1)
+    local function updateAutoCloseVisual()
+        if AutoCloseEnabled then
+            AutoCloseBtn.Text = "Auto-Close Window: ON"
+            AutoCloseBtn.BackgroundColor3 = Color3.fromRGB(41, 128, 185)
+            AutoCloseBtn.TextColor3 = Color3.new(1, 1, 1)
         else
-            StealthBtn.Text = "Stealth Mode: OFF (Visible UI)"
-            StealthBtn.BackgroundColor3 = Color3.fromRGB(70, 80, 95)
-            StealthBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+            AutoCloseBtn.Text = "Auto-Close Window: OFF (Keep Open)"
+            AutoCloseBtn.BackgroundColor3 = Color3.fromRGB(70, 80, 95)
+            AutoCloseBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
         end
     end
-    updateStealthBtnVisual()
+    updateAutoCloseVisual()
 
-    StealthBtn.MouseButton1Click:Connect(function()
-        StealthModeEnabled = not StealthModeEnabled
-        updateStealthBtnVisual()
+    AutoCloseBtn.MouseButton1Click:Connect(function()
+        AutoCloseEnabled = not AutoCloseEnabled
+        updateAutoCloseVisual()
     end)
 
     -- Manual Trigger Button
     local ManualBtn = Instance.new("TextButton", MainFrame)
     ManualBtn.Size = UDim2.new(1, -20, 0, 26)
-    ManualBtn.Position = UDim2.fromOffset(10, 140)
+    ManualBtn.Position = UDim2.fromOffset(10, 210)
     ManualBtn.BackgroundColor3 = Color3.fromRGB(230, 126, 34)
     ManualBtn.Font = Enum.Font.GothamBold
     ManualBtn.Text = "▶ Run Check Now"
@@ -673,16 +764,16 @@ local function createUI()
         end)
     end)
 
-    -- Target Rules Summary
-    local TargetLabel = Instance.new("TextLabel", MainFrame)
-    TargetLabel.Size = UDim2.new(1, -20, 0, 20)
-    TargetLabel.Position = UDim2.fromOffset(10, 178)
-    TargetLabel.BackgroundTransparency = 1
-    TargetLabel.Font = Enum.Font.Gotham
-    TargetLabel.Text = "Agi: 200  |  Reach: 800  |  Exp: MAX"
-    TargetLabel.TextColor3 = Color3.fromRGB(130, 150, 180)
-    TargetLabel.TextSize = 10
-    TargetLabel.TextXAlignment = Enum.TextXAlignment.Center
+    -- Rules Indicator Footer
+    local FooterLabel = Instance.new("TextLabel", MainFrame)
+    FooterLabel.Size = UDim2.new(1, -20, 0, 18)
+    FooterLabel.Position = UDim2.fromOffset(10, 244)
+    FooterLabel.BackgroundTransparency = 1
+    FooterLabel.Font = Enum.Font.Gotham
+    FooterLabel.Text = "Target: Agi 200 → Reach 800 → Exp MAX"
+    FooterLabel.TextColor3 = Color3.fromRGB(120, 140, 170)
+    FooterLabel.TextSize = 9
+    FooterLabel.TextXAlignment = Enum.TextXAlignment.Center
 
     -- Background Execution Loop
     task.spawn(function()
@@ -698,4 +789,4 @@ end
 
 -- Launch
 createUI()
-print("[Auto-Rebirth] V2 loaded successfully!")
+print("[Auto-Rebirth] V3 loaded successfully!")
