@@ -1,9 +1,12 @@
 -- ====================================================================
--- AUTO REBIRTH & STAT ALLOCATION (V5 - 100% HEADLESS & SILENT)
+-- AUTO REBIRTH & STAT ALLOCATION (V6 - GHOST WINDOW ENGINE)
 -- ====================================================================
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
+local GuiService = game:GetService("GuiService")
+local VIM = game:GetService("VirtualInputManager")
+local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -21,12 +24,63 @@ local isProcessing       = false
 local originalWinPos     = nil
 
 -- --------------------------------------------------------------------
--- Pure In-Memory Signal Dispatcher (Zero Cursor Movement)
+-- Ghost Cloak: Makes UI 100% Invisible to Human Eyes while Clickable
 -- --------------------------------------------------------------------
-local function fireClick(btn)
+local function makeGhost(guiObj)
+    if not guiObj then return end
+    for _, d in ipairs(guiObj:GetDescendants()) do
+        if d:IsA("GuiObject") then
+            if not d:GetAttribute("OrigBgTrans") then
+                d:SetAttribute("OrigBgTrans", d.BackgroundTransparency)
+            end
+            d.BackgroundTransparency = 1
+        end
+        if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+            if not d:GetAttribute("OrigTextTrans") then
+                d:SetAttribute("OrigTextTrans", d.TextTransparency)
+            end
+            d.TextTransparency = 1
+        end
+        if d:IsA("ImageLabel") or d:IsA("ImageButton") then
+            if not d:GetAttribute("OrigImgTrans") then
+                d:SetAttribute("OrigImgTrans", d.ImageTransparency)
+            end
+            d.ImageTransparency = 1
+        end
+        if d:IsA("UIStroke") then
+            if not d:GetAttribute("OrigStrokeTrans") then
+                d:SetAttribute("OrigStrokeTrans", d.Transparency)
+            end
+            d.Transparency = 1
+        end
+    end
+end
+
+local function restoreGhost(guiObj)
+    if not guiObj then return end
+    for _, d in ipairs(guiObj:GetDescendants()) do
+        if d:IsA("GuiObject") and d:GetAttribute("OrigBgTrans") then
+            d.BackgroundTransparency = d:GetAttribute("OrigBgTrans")
+        end
+        if (d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox")) and d:GetAttribute("OrigTextTrans") then
+            d.TextTransparency = d:GetAttribute("OrigTextTrans")
+        end
+        if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and d:GetAttribute("OrigImgTrans") then
+            d.ImageTransparency = d:GetAttribute("OrigImgTrans")
+        end
+        if d:IsA("UIStroke") and d:GetAttribute("OrigStrokeTrans") then
+            d.Transparency = d:GetAttribute("OrigStrokeTrans")
+        end
+    end
+end
+
+-- --------------------------------------------------------------------
+-- Engine-Level Clicker (Hover -> Press -> Release -> Restore Mouse)
+-- --------------------------------------------------------------------
+local function clickGui(btn)
     if not btn then return end
 
-    -- Layer 1: firesignal (all click variants)
+    -- 1. firesignal
     pcall(function()
         if typeof(firesignal) == "function" then
             firesignal(btn.Activated)
@@ -36,7 +90,7 @@ local function fireClick(btn)
         end
     end)
 
-    -- Layer 2: getconnections (triggers Lua connections in memory)
+    -- 2. getconnections
     pcall(function()
         if typeof(getconnections) == "function" then
             for _, sig in ipairs({btn.Activated, btn.MouseButton1Click, btn.MouseButton1Down, btn.MouseButton1Up}) do
@@ -46,10 +100,35 @@ local function fireClick(btn)
             end
         end
     end)
+
+    -- 3. VirtualInputManager Native Simulation
+    pcall(function()
+        if btn.AbsoluteSize.X > 0 and btn.AbsolutePosition.X > 0 and btn.AbsolutePosition.Y > 0 then
+            local inset = GuiService:GetGuiInset()
+            local cx = btn.AbsolutePosition.X + (btn.AbsoluteSize.X / 2)
+            local cy = btn.AbsolutePosition.Y + (btn.AbsoluteSize.Y / 2) + inset.Y
+            local origMouse = UserInputService:GetMouseLocation()
+
+            -- Hover over button
+            VIM:SendMouseMoveEvent(cx, cy, game)
+            task.wait(0.04)
+
+            -- Mouse down
+            VIM:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+            task.wait(0.06)
+
+            -- Mouse up
+            VIM:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
+            task.wait(0.04)
+
+            -- Restore original mouse position
+            VIM:SendMouseMoveEvent(origMouse.X, origMouse.Y, game)
+        end
+    end)
 end
 
 -- --------------------------------------------------------------------
--- Authentic TextBox Input (In Memory)
+-- Authentic TextBox Submission
 -- --------------------------------------------------------------------
 local function setCustomAmount(box, amount)
     if not box then return end
@@ -59,6 +138,12 @@ local function setCustomAmount(box, amount)
     pcall(function() box:CaptureFocus() end)
     box.Text = str
     pcall(function() box:ReleaseFocus(true) end)
+
+    pcall(function()
+        VIM:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+        task.wait(0.02)
+        VIM:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+    end)
 
     pcall(function()
         if typeof(firesignal) == "function" then firesignal(box.FocusLost, true) end
@@ -72,6 +157,23 @@ local function setCustomAmount(box, amount)
         end
     end)
     task.wait(0.1)
+end
+
+-- --------------------------------------------------------------------
+-- Check if an element is inside the Stats Window
+-- --------------------------------------------------------------------
+local function isInsideStatsWindow(obj)
+    local p = obj.Parent
+    while p and p ~= playerGui do
+        if p.Name == "UI_Stats" or p.Name == "StatsWindow" then return true end
+        for _, ch in ipairs(p:GetChildren()) do
+            if ch:IsA("TextLabel") and ch.Text and string.find(string.upper(ch.Text), "SPEND YOUR POINTS", 1, true) then
+                return true
+            end
+        end
+        p = p.Parent
+    end
+    return false
 end
 
 -- --------------------------------------------------------------------
@@ -110,21 +212,15 @@ end
 -- --------------------------------------------------------------------
 local function getHudStatsButton()
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text then
+        if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Visible then
             local clean = string.upper(string.gsub(desc.Text, "<[^>]+>", ""))
             clean = string.gsub(clean, "%s+", "")
             if clean == "STATS" then
-                local p = desc.Parent
-                local isInside = false
-                while p and p ~= playerGui do
-                    if p.Name == "UI_Stats" or p.Name == "StatsWindow" then
-                        isInside = true; break
-                    end
-                    p = p.Parent
-                end
-                if not isInside then
+                if not isInsideStatsWindow(desc) then
                     local btn = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
-                    if btn then return btn end
+                    if btn and btn.Visible and btn.AbsolutePosition.X > 0 and btn.AbsolutePosition.Y > 0 then
+                        return btn
+                    end
                 end
             end
         end
@@ -133,18 +229,18 @@ local function getHudStatsButton()
 end
 
 -- --------------------------------------------------------------------
--- Dedicated Rebirth Confirmation Dialog & YES Resolver
+-- Rebirth Confirmation Dialog Finder & YES Button Resolver
 -- --------------------------------------------------------------------
 local function findRebirthDialog()
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if desc:IsA("TextLabel") and desc.Text then
+        if desc:IsA("TextLabel") and desc.Text and desc.Visible then
             local clean = string.upper(string.gsub(desc.Text, "<[^>]+>", ""))
             if string.find(clean, "REBIRTH?") or string.find(clean, "STATS RESET") or string.find(clean, "BACK TO LEVEL 1") then
                 local frame = desc.Parent
                 while frame and frame ~= playerGui and not frame:IsA("ScreenGui") do
                     local btnCount = 0
                     for _, ch in ipairs(frame:GetDescendants()) do
-                        if ch:IsA("GuiButton") and ch.AbsoluteSize.X > 20 then
+                        if ch:IsA("GuiButton") and ch.Visible and ch.AbsoluteSize.X > 20 then
                             btnCount = btnCount + 1
                         end
                     end
@@ -164,20 +260,20 @@ local function getYesButtonFromDialog(dialogFrame)
 
     -- 1. RichText Tag-stripped text search
     for _, desc in ipairs(dialogFrame:GetDescendants()) do
-        if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text then
+        if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Visible then
             local noTags = string.gsub(desc.Text, "<[^>]+>", "")
             local clean = string.upper(string.gsub(noTags, "[^%a]", ""))
             if clean == "YES" or clean == "CONFIRM" or clean == "ACCEPT" then
                 local btn = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
-                if btn then return btn end
+                if btn and btn.Visible then return btn end
             end
         end
     end
 
-    -- 2. Geometric fallback (Left button inside REBIRTH? popup is ALWAYS YES)
+    -- 2. Geometric fallback (Left button is always YES)
     local buttons = {}
     for _, desc in ipairs(dialogFrame:GetDescendants()) do
-        if desc:IsA("GuiButton") and desc.AbsoluteSize.X > 30 then
+        if desc:IsA("GuiButton") and desc.Visible and desc.AbsoluteSize.X > 30 and desc.AbsolutePosition.X > 0 then
             table.insert(buttons, desc)
         end
     end
@@ -253,7 +349,7 @@ end
 local function findAddButtonInRow(row)
     local candidates = {}
     for _, desc in ipairs(row:GetDescendants()) do
-        if desc:IsA("GuiButton") then
+        if desc:IsA("GuiButton") and desc.Visible then
             local text = ""
             if desc:IsA("TextButton") then
                 text = desc.Text
@@ -339,10 +435,10 @@ local function getStatRow(win, statName)
 end
 
 -- --------------------------------------------------------------------
--- Silent Headless Rebirth Engine (Zero Visual Dialogues)
+-- Ghost Rebirth Execution (100% Invisible to Player)
 -- --------------------------------------------------------------------
-local function handleSilentRebirth(win, updateStatus)
-    -- Direct Network Remote Dispatch (Completely bypasses UI)
+local function handleGhostRebirth(win, updateStatus)
+    -- Direct Network Remote Probe
     pcall(function()
         for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
             if obj:IsA("RemoteEvent") and string.find(string.lower(obj.Name), "rebirth") then
@@ -351,18 +447,18 @@ local function handleSilentRebirth(win, updateStatus)
         end
     end)
 
-    -- Check if REBIRTH? dialog is ALREADY open (handles current screen state)
+    -- Check if REBIRTH? dialog is currently open
     local activeDialog = findRebirthDialog()
 
     if not activeDialog then
-        -- Find and click REBIRTH button invisibly
+        -- Find and click REBIRTH button
         local rebirthBtn = nil
         for _, desc in ipairs(win:GetDescendants()) do
-            if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text then
+            if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Visible then
                 local clean = string.upper(string.gsub(desc.Text, "%s+", ""))
                 if clean == "REBIRTH" then
                     local b = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
-                    if b then
+                    if b and b.Visible and b.AbsoluteSize.X > 0 then
                         rebirthBtn = b; break
                     end
                 end
@@ -371,8 +467,9 @@ local function handleSilentRebirth(win, updateStatus)
 
         if rebirthBtn then
             updateStatus("Rebirth Ready! Triggering...", Color3.fromRGB(241, 196, 15))
-            fireClick(rebirthBtn)
+            clickGui(rebirthBtn)
 
+            -- Wait for popup to open
             for _ = 1, 8 do
                 task.wait(0.2)
                 activeDialog = findRebirthDialog()
@@ -381,14 +478,15 @@ local function handleSilentRebirth(win, updateStatus)
         end
     end
 
-    -- Confirm YES immediately on the dialog in memory
+    -- If confirmation dialog appears, cloak it instantly and click YES
     if activeDialog then
-        updateStatus("Confirming YES (Silent)...", Color3.fromRGB(46, 204, 113))
+        makeGhost(activeDialog)
+        updateStatus("Confirming YES (Invisible)...", Color3.fromRGB(46, 204, 113))
 
         for attempt = 1, 4 do
             local yesBtn = getYesButtonFromDialog(activeDialog)
             if yesBtn then
-                fireClick(yesBtn)
+                clickGui(yesBtn)
                 task.wait(0.3)
             end
 
@@ -410,7 +508,7 @@ end
 local updateLiveStatsWidget = nil
 
 -- --------------------------------------------------------------------
--- Main Automation Cycle (100% Silent / Off-Screen)
+-- Main Automation Cycle (Ghost Mode)
 -- --------------------------------------------------------------------
 local function runAutomationCycle(updateStatus)
     if isProcessing then return end
@@ -418,29 +516,30 @@ local function runAutomationCycle(updateStatus)
 
     local success, err = pcall(function()
         local win = findStatsWindow()
+        local openedByScript = false
 
-        -- If Stats window is closed, open it headlessly via HUD button
+        -- If Stats window is closed, open it via HUD button
         if not win or not win.Visible then
             local hudBtn = getHudStatsButton()
             if hudBtn then
-                fireClick(hudBtn)
+                openedByScript = true
+                clickGui(hudBtn)
                 task.wait(0.35)
                 win = findStatsWindow()
             end
         end
 
-        if not win then
+        if not win or not win.Visible then
             updateStatus("Waiting for Stats HUD...", Color3.fromRGB(241, 196, 15))
             return
         end
 
-        -- SILENT CLOAK: Keep Stats window & all popups outside visible bounds
+        -- Ensure window is positioned on screen for VIM, but 100% transparent
         if win:IsA("GuiObject") then
-            if not originalWinPos then
-                originalWinPos = win.Position
+            if win.Position.X.Scale >= 4 then
+                win.Position = UDim2.fromScale(0.5, 0.5)
             end
-            -- Reposition far off-screen so zero pixels render on monitor
-            win.Position = UDim2.fromScale(5, 5)
+            makeGhost(win)
         end
 
         -- Refresh Live Stats Widget
@@ -448,8 +547,8 @@ local function runAutomationCycle(updateStatus)
             updateLiveStatsWidget(win)
         end
 
-        -- 1. Silent Rebirth Sequence
-        local didRebirth = handleSilentRebirth(win, updateStatus)
+        -- 1. Ghost Rebirth Execution
+        local didRebirth = handleGhostRebirth(win, updateStatus)
         if didRebirth then
             task.wait(0.8)
             if updateLiveStatsWidget then updateLiveStatsWidget(win) end
@@ -460,7 +559,7 @@ local function runAutomationCycle(updateStatus)
         local customBox = getCustomBox(win)
 
         if points > 0 and customBox then
-            updateStatus(string.format("Spending %d points (Silent)...", points), Color3.fromRGB(52, 152, 219))
+            updateStatus(string.format("Spending %d points (Invisible)...", points), Color3.fromRGB(52, 152, 219))
 
             -- Priority 1: Shadow Agility (Target 200)
             local agi = getStatRow(win, "Shadow Agility")
@@ -472,7 +571,7 @@ local function runAutomationCycle(updateStatus)
                     setCustomAmount(customBox, toSpend)
                     task.wait(0.08)
                     local freshAgi = getStatRow(win, "Shadow Agility")
-                    if freshAgi and freshAgi.button then fireClick(freshAgi.button) end
+                    if freshAgi and freshAgi.button then clickGui(freshAgi.button) end
                     task.wait(0.18)
                     points = getAvailablePoints(win)
                     if updateLiveStatsWidget then updateLiveStatsWidget(win) end
@@ -490,7 +589,7 @@ local function runAutomationCycle(updateStatus)
                         setCustomAmount(customBox, toSpend)
                         task.wait(0.08)
                         local freshRch = getStatRow(win, "Shadow Reach")
-                        if freshRch and freshRch.button then fireClick(freshRch.button) end
+                        if freshRch and freshRch.button then clickGui(freshRch.button) end
                         task.wait(0.18)
                         points = getAvailablePoints(win)
                         if updateLiveStatsWidget then updateLiveStatsWidget(win) end
@@ -509,7 +608,7 @@ local function runAutomationCycle(updateStatus)
                         setCustomAmount(customBox, toSpend)
                         task.wait(0.08)
                         local freshExp = getStatRow(win, "Player Experience")
-                        if freshExp and freshExp.button then fireClick(freshExp.button) end
+                        if freshExp and freshExp.button then clickGui(freshExp.button) end
                         task.wait(0.18)
                         points = getAvailablePoints(win)
                         if updateLiveStatsWidget then updateLiveStatsWidget(win) end
@@ -527,7 +626,7 @@ local function runAutomationCycle(updateStatus)
                         setCustomAmount(customBox, points)
                         task.wait(0.08)
                         local freshRch = getStatRow(win, "Shadow Reach")
-                        if freshRch and freshRch.button then fireClick(freshRch.button) end
+                        if freshRch and freshRch.button then clickGui(freshRch.button) end
                         task.wait(0.18)
                         if updateLiveStatsWidget then updateLiveStatsWidget(win) end
                     end
@@ -535,6 +634,17 @@ local function runAutomationCycle(updateStatus)
             end
         else
             updateStatus("Active (Points: 0 | Monitoring)", Color3.fromRGB(230, 230, 230))
+        end
+
+        -- Safe Close: Close window only if opened by script AND no Rebirth dialog is open
+        if openedByScript and not findRebirthDialog() then
+            task.wait(0.15)
+            for _, d in ipairs(win:GetDescendants()) do
+                if d:IsA("GuiButton") and (d.Name == "Close" or (d:IsA("TextButton") and d.Text == "X")) then
+                    clickGui(d)
+                    break
+                end
+            end
         end
     end)
 
@@ -598,7 +708,7 @@ local function createUI()
     TitleLabel.Position = UDim2.fromOffset(10, 0)
     TitleLabel.BackgroundTransparency = 1
     TitleLabel.Font = Enum.Font.GothamBold
-    TitleLabel.Text = "⚡ Auto Rebirth (Silent)"
+    TitleLabel.Text = "⚡ Auto Rebirth (Ghost)"
     TitleLabel.TextColor3 = Color3.fromRGB(240, 240, 240)
     TitleLabel.TextSize = 13
     TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -614,11 +724,8 @@ local function createUI()
     local CloseCorner = Instance.new("UICorner", CloseBtn)
     CloseCorner.CornerRadius = UDim.new(0, 6)
     CloseBtn.MouseButton1Click:Connect(function()
-        -- Restore original window position on exit
-        if originalWinPos then
-            local win = findStatsWindow()
-            if win and win:IsA("GuiObject") then win.Position = originalWinPos end
-        end
+        local win = findStatsWindow()
+        if win then restoreGhost(win) end
         ScreenGui:Destroy()
     end)
 
@@ -776,14 +883,14 @@ local function createUI()
     FooterLabel.Position = UDim2.fromOffset(10, 214)
     FooterLabel.BackgroundTransparency = 1
     FooterLabel.Font = Enum.Font.Gotham
-    FooterLabel.Text = "100% Headless: Agi 200 → Reach 800 → Exp MAX"
+    FooterLabel.Text = "Ghost Mode: Agi 200 → Reach 800 → Exp MAX"
     FooterLabel.TextColor3 = Color3.fromRGB(120, 140, 170)
     FooterLabel.TextSize = 9
     FooterLabel.TextXAlignment = Enum.TextXAlignment.Center
 
     -- Background Execution Loop
     task.spawn(function()
-        updateStatusText("Ready (Silent)", Color3.fromRGB(46, 204, 113))
+        updateStatusText("Ready (Ghost)", Color3.fromRGB(46, 204, 113))
         while ScreenGui.Parent do
             task.wait(CHECK_INTERVAL)
             if AutoRebirthEnabled then
@@ -795,4 +902,4 @@ end
 
 -- Launch
 createUI()
-print("[Auto-Rebirth] V5 (100% Silent) loaded successfully!")
+print("[Auto-Rebirth] V6 (Ghost Engine) loaded successfully!")
