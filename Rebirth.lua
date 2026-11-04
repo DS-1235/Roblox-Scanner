@@ -1,5 +1,5 @@
 -- ====================================================================
--- AUTO REBIRTH & STAT ALLOCATION (RAPID VISIBLE ENGINE)
+-- AUTO REBIRTH & STAT ALLOCATION (FINAL RAPID ENGINE)
 -- ====================================================================
 
 local Players = game:GetService("Players")
@@ -10,7 +10,7 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- --------------------------------------------------------------------
--- Configuration
+-- Configuration Targets
 -- --------------------------------------------------------------------
 local TARGET_AGILITY = 200   -- Priority 1: 200 Shadow Agility
 local TARGET_REACH   = 800   -- Priority 2: 800 Shadow Reach
@@ -21,7 +21,7 @@ local AutoRebirthEnabled = true
 local isProcessing       = false
 
 -- --------------------------------------------------------------------
--- Proven Click Helper (From Working Dungeon Scripts)
+-- Proven Native Click Helper
 -- --------------------------------------------------------------------
 local function clickButton(b)
     if not b then return end
@@ -44,7 +44,7 @@ local function clickButton(b)
         end)
     end
 
-    -- 3. VirtualInputManager (Standard Engine Click)
+    -- 3. VirtualInputManager Native Simulation
     pcall(function()
         if b.AbsoluteSize.X > 0 and b.AbsoluteSize.Y > 0 then
             local inset = GuiService:GetGuiInset()
@@ -138,24 +138,103 @@ local function findStatsWindow()
 end
 
 -- --------------------------------------------------------------------
+-- Strict HUD Stats Button Validator (Prevents Clicking Daily)
+-- --------------------------------------------------------------------
+local function isStatsHudButton(btn)
+    if not btn:IsA("GuiButton") or not btn.Visible then return false end
+
+    local n = string.lower(btn.Name)
+    -- Explicitly reject non-stats buttons
+    local banned = {"daily", "wheel", "shop", "quest", "dungeon", "world", "event", "menu", "close", "claim"}
+    for _, bad in ipairs(banned) do
+        if string.find(n, bad) then return false end
+    end
+
+    -- Look for text "Stats" inside this button
+    for _, d in ipairs(btn:GetDescendants()) do
+        if d:IsA("TextLabel") and d.Text then
+            local clean = string.upper(string.gsub(d.Text, "<[^>]+>", ""))
+            clean = string.gsub(clean, "[^%a]", "")
+            if clean == "DAILY" or clean == "WHEEL" or clean == "SHOP" then
+                return false
+            end
+            if clean == "STATS" then
+                return true
+            end
+        end
+    end
+
+    -- Check button name itself
+    if string.find(n, "stat") then return true end
+
+    return false
+end
+
+-- --------------------------------------------------------------------
 -- Locate Hexagonal HUD 'Stats' Button
 -- --------------------------------------------------------------------
 local function getHudStatsButton()
+    -- 1. Scan TextLabels with text "Stats"
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Visible then
+        if desc:IsA("TextLabel") and desc.Text and desc.Visible then
             local clean = string.upper(string.gsub(desc.Text, "<[^>]+>", ""))
-            clean = string.gsub(clean, "%s+", "")
-            if clean == "STATS" then
-                if not isInsideStatsWindow(desc) then
-                    local btn = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
-                    if btn and btn.Visible and btn.AbsolutePosition.X > 0 and btn.AbsolutePosition.Y > 0 then
-                        return btn
+            clean = string.gsub(clean, "[^%a]", "")
+            if clean == "STATS" and not isInsideStatsWindow(desc) then
+                -- Check desc itself
+                if desc:IsA("GuiButton") and isStatsHudButton(desc) then return desc end
+
+                -- Check direct parent
+                if desc.Parent and isStatsHudButton(desc.Parent) then return desc.Parent end
+
+                -- Check sibling button inside parent
+                if desc.Parent then
+                    for _, ch in ipairs(desc.Parent:GetChildren()) do
+                        if isStatsHudButton(ch) then return ch end
+                    end
+                end
+
+                -- Check grandparent
+                if desc.Parent and desc.Parent.Parent then
+                    for _, ch in ipairs(desc.Parent.Parent:GetChildren()) do
+                        if isStatsHudButton(ch) then return ch end
                     end
                 end
             end
         end
     end
+
+    -- 2. Direct name scan in HUD
+    for _, desc in ipairs(playerGui:GetDescendants()) do
+        if desc:IsA("GuiButton") and desc.Visible and isStatsHudButton(desc) and not isInsideStatsWindow(desc) then
+            return desc
+        end
+    end
+
     return nil
+end
+
+-- --------------------------------------------------------------------
+-- Auto-Dismiss Unwanted Popups (e.g. Daily Rewards)
+-- --------------------------------------------------------------------
+local function dismissUnwantedPopups()
+    for _, desc in ipairs(playerGui:GetDescendants()) do
+        if desc:IsA("TextLabel") and desc.Text and desc.Visible then
+            local t = string.upper(desc.Text)
+            if string.find(t, "DAILY REWARD") or string.find(t, "LOGIN REWARD") or string.find(t, "SPIN THE WHEEL") then
+                local p = desc.Parent
+                while p and p ~= playerGui and not p:IsA("ScreenGui") do
+                    for _, b in ipairs(p:GetDescendants()) do
+                        if b:IsA("GuiButton") and (b.Name == "Close" or (b:IsA("TextButton") and b.Text == "X")) then
+                            clickButton(b)
+                            task.wait(0.1)
+                            return
+                        end
+                    end
+                    p = p.Parent
+                end
+            end
+        end
+    end
 end
 
 -- --------------------------------------------------------------------
@@ -195,7 +274,9 @@ local function getYesButton(dialogFrame)
             local clean = string.upper(string.gsub(noTags, "[^%a]", ""))
             if clean == "YES" or clean == "CONFIRM" or clean == "ACCEPT" then
                 local btn = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
-                if btn and btn.Visible then return btn end
+                if btn and btn.Visible and not string.find(string.lower(btn.Name), "no") then
+                    return btn
+                end
             end
         end
     end
@@ -379,7 +460,7 @@ local function handleRapidRebirth(win, updateStatus)
                 local clean = string.upper(string.gsub(desc.Text, "%s+", ""))
                 if clean == "REBIRTH" then
                     local b = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
-                    if b and b.Visible and b.AbsoluteSize.X > 0 then
+                    if b and b.Visible and b.AbsoluteSize.X > 0 and b.AbsolutePosition.X > 0 then
                         rebirthBtn = b; break
                     end
                 end
@@ -434,10 +515,13 @@ local function runAutomationCycle(updateStatus)
     isProcessing = true
 
     local success, err = pcall(function()
+        -- 0. Close any accidental popups like Daily Rewards
+        dismissUnwantedPopups()
+
         local win = findStatsWindow()
         local openedByScript = false
 
-        -- If Stats window is closed, open it rapidly via HUD button
+        -- If Stats window is closed, locate the real Stats HUD button and open it
         if not win or not win.Visible then
             local hudBtn = getHudStatsButton()
             if hudBtn then
@@ -543,7 +627,7 @@ local function runAutomationCycle(updateStatus)
             updateStatus("Active (Monitoring Level & Stats)", Color3.fromRGB(230, 230, 230))
         end
 
-        -- Rapid Close: Close window immediately if opened by script AND no Rebirth dialog open
+        -- Rapid Close: Snap window closed immediately if opened by script
         if openedByScript and not findRebirthDialog() then
             task.wait(0.1)
             for _, d in ipairs(win:GetDescendants()) do
@@ -807,4 +891,4 @@ end
 
 -- Launch
 createUI()
-print("[Auto-Rebirth] Rapid Engine loaded successfully!")
+print("[Auto-Rebirth] Final Rapid Engine loaded successfully!")
