@@ -11,7 +11,7 @@ if oldGui then
 	oldGui:Destroy()
 end
 
--- Create Draggable UI (Always on top of game menus)
+-- Create Draggable Control UI
 local gui = Instance.new("ScreenGui")
 gui.Name = "NS_Rebirth"
 gui.ResetOnSpawn = false
@@ -34,7 +34,7 @@ infoLabel.TextColor3 = Color3.new(1, 1, 1)
 infoLabel.TextSize = 12
 infoLabel.TextWrapped = true
 infoLabel.TextYAlignment = Enum.TextYAlignment.Top
-infoLabel.Text = "Auto Rebirth & Stats (1-Click Input): Ready\nClick START to begin"
+infoLabel.Text = "Background Auto-Rebirth: Ready\nClick START to run in background"
 infoLabel.Parent = frame
 
 local function createButton(text, xOffset, width)
@@ -55,10 +55,12 @@ local active = false
 local alive = true
 local busy = false
 local rebirthCount = 0
+local lastSyncTime = os.clock()
 
 local AGILITY_TARGET = 200
 local INITIAL_RANGE_TARGET = 800
-local ACTION_DELAY = 0.35
+local ACTION_DELAY = 0.3
+local PERIODIC_SYNC_INTERVAL = 12 -- Seconds between quick checks if UI updates are paused while closed
 
 local function logStatus(stageText, detailText)
 	local msg = string.format(
@@ -71,8 +73,13 @@ local function logStatus(stageText, detailText)
 	print("[AutoRebirth] " .. stageText .. (detailText and (" | " .. detailText) or ""))
 end
 
--- Checks if an element is effectively visible on screen (and not in __Disable)
-local function isVisible(obj)
+local function cleanUpper(str)
+	if type(str) ~= "string" then return "" end
+	return string.upper(string.match(str, "^%s*(.-)%s*$") or "")
+end
+
+-- Checks if an element is actively visible on screen (not inside __Disable)
+local function isVisibleOnScreen(obj)
 	if not obj or not obj:IsDescendantOf(playerGui) then
 		return false
 	end
@@ -92,6 +99,19 @@ local function isVisible(obj)
 	return obj.AbsoluteSize.X > 2 and obj.AbsoluteSize.Y > 2
 end
 
+-- Checks if an element is marked Visible within its own local hierarchy (works even inside __Disable)
+local function isLocallyVisible(obj, stopAt)
+	if not obj then return false end
+	local cur = obj
+	while cur and cur ~= stopAt and cur ~= playerGui do
+		if cur:IsA("GuiObject") and not cur.Visible then
+			return false
+		end
+		cur = cur.Parent
+	end
+	return true
+end
+
 -- Clicks a GuiButton safely
 local function clickButton(btn)
 	if not btn then return end
@@ -108,26 +128,22 @@ local function clickButton(btn)
 	end
 end
 
--- Trims whitespace and converts string to uppercase
-local function cleanUpper(str)
-	if type(str) ~= "string" then return "" end
-	return string.upper(string.match(str, "^%s*(.-)%s*$") or "")
-end
-
--- Finds the clickable GuiButton associated with a TextLabel/TextButton
-local function getClickableFromLabel(lbl)
+-- Resolves a clickable GuiButton from a label or button
+local function getClickableFromLabel(lbl, requireScreenVisible)
 	if not lbl then return nil end
-	if lbl:IsA("GuiButton") and isVisible(lbl) then
+	local checkFn = requireScreenVisible and isVisibleOnScreen or function(o) return o ~= nil end
+
+	if lbl:IsA("GuiButton") and checkFn(lbl) then
 		return lbl
 	end
 	local ancestorBtn = lbl:FindFirstAncestorWhichIsA("GuiButton")
-	if ancestorBtn and isVisible(ancestorBtn) then
+	if ancestorBtn and checkFn(ancestorBtn) then
 		return ancestorBtn
 	end
 	local parent = lbl.Parent
 	if parent then
 		for _, child in ipairs(parent:GetDescendants()) do
-			if child:IsA("GuiButton") and isVisible(child) then
+			if child:IsA("GuiButton") and checkFn(child) then
 				return child
 			end
 		end
@@ -135,129 +151,136 @@ local function getClickableFromLabel(lbl)
 	return nil
 end
 
--- Finds a visible TextLabel/TextButton with exact matching text (case-insensitive)
-local function findVisibleLabelByExactText(targetText, searchRoot)
+-- Finds a TextLabel/TextButton by exact text (supports both visible-only and background searches)
+local function findLabelByText(targetText, requireScreenVisible, searchRoot)
 	local root = searchRoot or playerGui
 	local target = cleanUpper(targetText)
 	for _, desc in ipairs(root:GetDescendants()) do
 		if not desc:IsDescendantOf(gui) and (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
-			if cleanUpper(desc.Text) == target and isVisible(desc) then
-				return desc
+			if cleanUpper(desc.Text) == target then
+				if not requireScreenVisible or isVisibleOnScreen(desc) then
+					return desc
+				end
 			end
 		end
 	end
 	return nil
 end
 
--- Checks if the Stats window is currently open
-local function isStatsWindowOpen()
-	local spendHeader = findVisibleLabelByExactText("SPEND YOUR POINTS")
-	return spendHeader ~= nil
+-- Locates the root window container of the Stats UI (whether open in Menus or closed in __Disable)
+local function getStatsWindowRoot(requireScreenVisible)
+	local spendHeader = findLabelByText("SPEND YOUR POINTS", requireScreenVisible)
+	if not spendHeader then return nil end
+
+	local cur = spendHeader
+	for _ = 1, 6 do
+		if not cur.Parent or cur.Parent == playerGui or cur.Parent.Name == "Menus" or cur.Parent.Name == "__Disable" then
+			break
+		end
+		cur = cur.Parent
+	end
+	return cur
 end
 
--- Reads available stat points from the "POINTS" diamond on the left panel
-local function getAvailablePoints()
-	local pointsHeader = findVisibleLabelByExactText("POINTS")
-	if not pointsHeader then return 0 end
+local function isStatsWindowOpen()
+	return findLabelByText("SPEND YOUR POINTS", true) ~= nil
+end
+
+-- Finds the top-right red "X" Close button (strictly anchored next to "x100" so it never clicks "RESET STATS")
+local function findStatsCloseButton()
+	local x100Label = findLabelByText("x100", true)
+	if not x100Label then return nil end
+
+	local x100Pos = x100Label.AbsolutePosition
+	local headerContainer = x100Label.Parent
+	for _ = 1, 4 do
+		if headerContainer and headerContainer ~= playerGui then
+			for _, desc in ipairs(headerContainer:GetDescendants()) do
+				if not desc:IsDescendantOf(gui) and (desc:IsA("TextLabel") or desc:IsA("TextButton")) and isVisibleOnScreen(desc) then
+					if cleanUpper(desc.Text) == "X" then
+						-- Verify it is to the right of x100 and on the same top header row
+						local pos = desc.AbsolutePosition
+						if pos.X > x100Pos.X and math.abs(pos.Y - x100Pos.Y) < 70 then
+							local btn = getClickableFromLabel(desc, true)
+							if btn then
+								return btn
+							end
+						end
+					end
+				end
+			end
+			headerContainer = headerContainer.Parent
+		end
+	end
+	return nil
+end
+
+-- Closes the Stats window if it is currently open on screen
+local function closeStatsWindow()
+	if not isStatsWindowOpen() then return end
+	local closeBtn = findStatsCloseButton()
+	if closeBtn then
+		clickButton(closeBtn)
+		task.wait(0.25)
+	end
+end
+
+-- Opens the Stats window by clicking the "Stats" hexagon button
+local function openStatsWindow()
+	if isStatsWindowOpen() then return true end
+	local statsHexLabel = findLabelByText("Stats", true)
+	local statsHexBtn = getClickableFromLabel(statsHexLabel, true)
+	if statsHexBtn then
+		clickButton(statsHexBtn)
+		for _ = 1, 10 do
+			task.wait(0.1)
+			if isStatsWindowOpen() then
+				lastSyncTime = os.clock()
+				return true
+			end
+		end
+	end
+	return isStatsWindowOpen()
+end
+
+-- Reads unspent stat points (works both when Stats window is open or in background)
+local function getAvailablePoints(statsRoot, requireScreenVisible)
+	local pointsHeader = findLabelByText("POINTS", requireScreenVisible, statsRoot)
+	if not pointsHeader then return nil end
 
 	local container = pointsHeader.Parent
 	for _ = 1, 2 do
 		if container then
 			for _, desc in ipairs(container:GetDescendants()) do
-				if desc ~= pointsHeader and desc:IsA("TextLabel") and isVisible(desc) then
-					local raw = string.gsub(desc.Text or "", "[,%s]", "")
-					local num = tonumber(raw)
-					if num ~= nil then
-						return num
+				if desc ~= pointsHeader and desc:IsA("TextLabel") then
+					if not requireScreenVisible or isVisibleOnScreen(desc) then
+						local raw = string.gsub(desc.Text or "", "[,%s]", "")
+						local num = tonumber(raw)
+						if num ~= nil then
+							return num
+						end
 					end
 				end
 			end
 			container = container.Parent
 		end
 	end
-	return 0
-end
-
--- Finds the custom stat amount TextBox located next to the "Talents" and "x1" buttons
-local function findAmountInputBox()
-	local anchor = findVisibleLabelByExactText("Talents") or findVisibleLabelByExactText("x1")
-	if anchor then
-		local topBar = anchor.Parent
-		for _ = 1, 4 do
-			if topBar and topBar ~= playerGui then
-				for _, desc in ipairs(topBar:GetDescendants()) do
-					if not desc:IsDescendantOf(gui) and desc:IsA("TextBox") and isVisible(desc) then
-						return desc
-					end
-				end
-				topBar = topBar.Parent
-			end
-		end
-	end
-
-	-- Fallback: find any visible TextBox inside PlayerGui (excluding our script UI)
-	for _, desc in ipairs(playerGui:GetDescendants()) do
-		if not desc:IsDescendantOf(gui) and desc:IsA("TextBox") and isVisible(desc) then
-			return desc
-		end
-	end
 	return nil
 end
 
--- Enters the exact stat amount into the top TextBox so 1 click allocates that amount
-local function setCustomAmount(amount)
-	local targetInt = math.max(1, math.floor(amount))
-	local targetStr = tostring(targetInt)
-
-	local box = findAmountInputBox()
-	if not box then
-		warn("[AutoRebirth] Could not find the custom amount TextBox!")
-		return false
-	end
-
-	local currentVal = tonumber((string.gsub(box.Text or "", "[,%s]", "")))
-	if currentVal == targetInt then
-		return true
-	end
-
-	pcall(function()
-		box:CaptureFocus()
-	end)
-	task.wait(0.05)
-
-	box.Text = targetStr
-	task.wait(0.05)
-
-	if typeof(firesignal) == "function" then
-		pcall(function() firesignal(box.FocusLost, true) end)
-	end
-	pcall(function()
-		box:ReleaseFocus(true)
-	end)
-
-	-- Send Return key in case the game listens to Enter key release
-	VIM:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
-	task.wait(0.04)
-	VIM:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
-	task.wait(0.2)
-
-	return true
-end
-
--- Locates a stat row ("Shadow Agility", "Shadow Reach", "Player Experience")
--- Returns: currentLevel, maxLevel, upgradeButton, isMaxed
-local function getStatRowData(statTitle)
-	local titleLabel = findVisibleLabelByExactText(statTitle)
+-- Reads a stat row ("Shadow Agility", "Shadow Reach", "Player Experience")
+local function getStatRowData(statTitle, statsRoot, requireScreenVisible)
+	local titleLabel = findLabelByText(statTitle, requireScreenVisible, statsRoot)
 	if not titleLabel then return nil end
 
 	local row = titleLabel.Parent
-	while row and row ~= playerGui do
+	while row and row ~= playerGui and row ~= statsRoot do
 		local curLv, maxLv = nil, nil
 		local actionBtn = nil
 		local isMaxed = false
 
 		for _, desc in ipairs(row:GetDescendants()) do
-			if desc:IsA("TextLabel") and isVisible(desc) then
+			if desc:IsA("TextLabel") then
 				local txt = desc.Text or ""
 				local cStr, mStr = string.match(txt, "[Ll][Vv]%s*([%d,]+)%s*/%s*([%d,]+)")
 				if cStr and mStr then
@@ -269,10 +292,10 @@ local function getStatRowData(statTitle)
 
 		if curLv and maxLv then
 			for _, desc in ipairs(row:GetDescendants()) do
-				if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and isVisible(desc) then
+				if desc:IsA("TextLabel") or desc:IsA("TextButton") then
 					local t = cleanUpper(desc.Text)
 					if t == "MAX" or string.sub(t, 1, 1) == "+" then
-						local b = getClickableFromLabel(desc)
+						local b = getClickableFromLabel(desc, requireScreenVisible)
 						if b then
 							actionBtn = b
 							if t == "MAX" then
@@ -296,6 +319,71 @@ local function getStatRowData(statTitle)
 	return nil
 end
 
+-- Checks if the REBIRTH button is available (even in background)
+local function isRebirthAvailable(statsRoot, requireScreenVisible)
+	local rebirthLabel = findLabelByText("REBIRTH", requireScreenVisible, statsRoot)
+	if not rebirthLabel then return false, nil end
+	if not isLocallyVisible(rebirthLabel, statsRoot) then
+		return false, nil
+	end
+	local btn = getClickableFromLabel(rebirthLabel, requireScreenVisible)
+	if not btn or not isLocallyVisible(btn, statsRoot) then
+		return false, nil
+	end
+	return true, btn
+end
+
+-- Finds the custom stat amount TextBox located next to "Talents" and "x1"
+local function findAmountInputBox()
+	local anchor = findLabelByText("Talents", true) or findLabelByText("x1", true)
+	if anchor then
+		local topBar = anchor.Parent
+		for _ = 1, 4 do
+			if topBar and topBar ~= playerGui then
+				for _, desc in ipairs(topBar:GetDescendants()) do
+					if not desc:IsDescendantOf(gui) and desc:IsA("TextBox") and isVisibleOnScreen(desc) then
+						return desc
+					end
+				end
+				topBar = topBar.Parent
+			end
+		end
+	end
+	return nil
+end
+
+-- Enters the exact stat amount into the top TextBox so 1 click allocates that amount
+local function setCustomAmount(amount)
+	local targetInt = math.max(1, math.floor(amount))
+	local targetStr = tostring(targetInt)
+
+	local box = findAmountInputBox()
+	if not box then return false end
+
+	local currentVal = tonumber((string.gsub(box.Text or "", "[,%s]", "")))
+	if currentVal == targetInt then
+		return true
+	end
+
+	pcall(function() box:CaptureFocus() end)
+	task.wait(0.05)
+
+	box.Text = targetStr
+	task.wait(0.05)
+
+	if typeof(firesignal) == "function" then
+		pcall(function() firesignal(box.FocusLost, true) end)
+	end
+	pcall(function() box:ReleaseFocus(true) end)
+
+	VIM:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+	task.wait(0.04)
+	VIM:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+	task.wait(0.18)
+
+	return true
+end
+
 -- Allocates `amount` points to the given row button in a single click
 local function allocateStatOnce(stageName, amount, upgradeBtn, summary)
 	if setCustomAmount(amount) then
@@ -305,115 +393,172 @@ local function allocateStatOnce(stageName, amount, upgradeBtn, summary)
 	end
 end
 
--- Main Automation Step
-local function stepAutomation()
+-- Inspects current state (works in background or foreground) to decide if we need the window open
+local function checkNeedsAction(requireScreenVisible)
+	if findLabelByText("REBIRTH?", true) then
+		return true, "Rebirth Confirm Open", ""
+	end
+
+	local statsRoot = getStatsWindowRoot(requireScreenVisible)
+	if not statsRoot then
+		return false, "Stats UI not loaded yet", ""
+	end
+
+	local canRebirth = isRebirthAvailable(statsRoot, requireScreenVisible)
+	local points = getAvailablePoints(statsRoot, requireScreenVisible) or 0
+	local agiCur, agiMax, _, agiMaxed = getStatRowData("Shadow Agility", statsRoot, requireScreenVisible)
+	local reachCur, reachMax, _, reachMaxed = getStatRowData("Shadow Reach", statsRoot, requireScreenVisible)
+	local expCur, expMax, _, expMaxed = getStatRowData("Player Experience", statsRoot, requireScreenVisible)
+
+	local summary = string.format(
+		"Pts: %d | Agi: %s | Reach: %s | Exp: %s/%s",
+		points,
+		tostring(agiCur or "?"),
+		tostring(reachCur or "?"),
+		tostring(expCur or "?"),
+		tostring(expMax or "?")
+	)
+
+	if canRebirth then
+		return true, "Max Level! Rebirth Ready", summary
+	end
+
+	if points > 0 and agiCur and reachCur and expCur then
+		local agiNeed = (not agiMaxed) and (agiCur < math.min(AGILITY_TARGET, agiMax))
+		local reachInitNeed = (not reachMaxed) and (reachCur < math.min(INITIAL_RANGE_TARGET, reachMax))
+		local expNeed = (not expMaxed) and (expCur < expMax)
+		local reachExcessNeed = (not reachMaxed) and (reachCur < reachMax)
+
+		if agiNeed or reachInitNeed or expNeed or reachExcessNeed then
+			return true, "Points Available (" .. points .. ")", summary
+		end
+	end
+
+	return false, "Monitoring in Background", summary
+end
+
+-- Executes pending Rebirth and Stat Allocations, then immediately closes the Stats window
+local function executeActiveBurst()
+	if not openStatsWindow() then
+		logStatus("Waiting for UI", "Could not open Stats window right now")
+		return
+	end
+
+	-- Process up to 6 actions in a single burst so everything finishes in ~1 second
+	for _ = 1, 6 do
+		if not active then break end
+
+		-- 1. Confirm Rebirth if popup is open
+		local rebirthConfirmHeader = findLabelByText("REBIRTH?", true)
+		if rebirthConfirmHeader then
+			local yesLabel = findLabelByText("YES", true)
+			local yesBtn = getClickableFromLabel(yesLabel, true)
+			if yesBtn then
+				logStatus("Confirming Rebirth", "Clicking YES...")
+				clickButton(yesBtn)
+				rebirthCount += 1
+				task.wait(1.2)
+			end
+		end
+
+		local statsRoot = getStatsWindowRoot(true)
+		if not statsRoot then break end
+
+		-- 2. Click REBIRTH if visible
+		local canRebirth, rebirthBtn = isRebirthAvailable(statsRoot, true)
+		if canRebirth and rebirthBtn then
+			logStatus("Max Level Reached!", "Clicking REBIRTH...")
+			clickButton(rebirthBtn)
+			task.wait(0.6)
+			continue
+		end
+
+		-- 3. Read live points & stat rows
+		local points = getAvailablePoints(statsRoot, true) or 0
+		local agiCur, agiMax, agiBtn, agiMaxed = getStatRowData("Shadow Agility", statsRoot, true)
+		local reachCur, reachMax, reachBtn, reachMaxed = getStatRowData("Shadow Reach", statsRoot, true)
+		local expCur, expMax, expBtn, expMaxed = getStatRowData("Player Experience", statsRoot, true)
+
+		if not (agiCur and reachCur and expCur) or points <= 0 then
+			break
+		end
+
+		local summary = string.format(
+			"Pts: %d | Agi: %d | Reach: %d | Exp: %d/%d",
+			points, agiCur, reachCur, expCur, expMax
+		)
+
+		-- Priority 1: Shadow Agility -> 200 (1 click)
+		local agiGoal = math.min(AGILITY_TARGET, agiMax)
+		if agiCur < agiGoal and not agiMaxed and agiBtn then
+			local toAdd = math.min(points, agiGoal - agiCur)
+			allocateStatOnce("Step 1: Shadow Agility -> 200", toAdd, agiBtn, summary)
+			continue
+		end
+
+		-- Priority 2: Shadow Reach -> 800 (1 click)
+		local reachInitialGoal = math.min(INITIAL_RANGE_TARGET, reachMax)
+		if reachCur < reachInitialGoal and not reachMaxed and reachBtn then
+			local toAdd = math.min(points, reachInitialGoal - reachCur)
+			allocateStatOnce("Step 2: Shadow Reach -> 800", toAdd, reachBtn, summary)
+			continue
+		end
+
+		-- Priority 3: Player Experience -> MAX (1 click)
+		if not expMaxed and expCur < expMax and expBtn then
+			local toAdd = math.min(points, expMax - expCur)
+			allocateStatOnce("Step 3: Maxing Player Exp", toAdd, expBtn, summary)
+			continue
+		end
+
+		-- Priority 4: Excess Points -> Shadow Reach (1 click)
+		if not reachMaxed and reachCur < reachMax and reachBtn then
+			local toAdd = math.min(points, reachMax - reachCur)
+			allocateStatOnce("Step 4: Excess -> Shadow Reach", toAdd, reachBtn, summary)
+			continue
+		end
+
+		-- All target stats are maxed
+		break
+	end
+
+	-- Immediately close the Stats window so gameplay is never blocked
+	closeStatsWindow()
+	lastSyncTime = os.clock()
+end
+
+-- Main Background Loop Step
+local function stepBackgroundAutomation()
 	if busy then return end
 	busy = true
 
-	-- 1. Check if the "REBIRTH?" confirmation dialogue is currently open
-	local rebirthConfirmHeader = findVisibleLabelByExactText("REBIRTH?")
-	if rebirthConfirmHeader then
-		local yesLabel = findVisibleLabelByExactText("YES")
-		local yesBtn = getClickableFromLabel(yesLabel)
-		if yesBtn then
-			logStatus("Confirming Rebirth", "Clicking YES on confirmation popup...")
-			clickButton(yesBtn)
-			rebirthCount += 1
-			task.wait(1.5)
-			busy = false
-			return
+	-- Check background state without opening the window
+	local needsAction, statusTitle, summary = checkNeedsAction(false)
+
+	-- Periodic quick sync in case the game doesn't update hidden UI labels while closed
+	if not needsAction and (os.clock() - lastSyncTime) >= PERIODIC_SYNC_INTERVAL then
+		if openStatsWindow() then
+			task.wait(0.15)
+			needsAction, statusTitle, summary = checkNeedsAction(true)
+			if not needsAction then
+				closeStatsWindow()
+			end
 		end
+		lastSyncTime = os.clock()
 	end
 
-	-- 2. Make sure the Stats window is open
-	if not isStatsWindowOpen() then
-		local statsHexLabel = findVisibleLabelByExactText("Stats")
-		local statsHexBtn = getClickableFromLabel(statsHexLabel)
-		if statsHexBtn then
-			logStatus("Opening Stats Window", "Clicking Stats menu button...")
-			clickButton(statsHexBtn)
-			task.wait(1.0)
-		else
-			logStatus("Waiting for UI", "Stats button / window not visible yet...")
+	if needsAction then
+		executeActiveBurst()
+		local _, postTitle, postSummary = checkNeedsAction(false)
+		logStatus(postTitle, postSummary)
+	else
+		-- Make sure the Stats window stays closed while idle
+		if isStatsWindowOpen() then
+			closeStatsWindow()
 		end
-		busy = false
-		return
+		logStatus(statusTitle, summary)
 	end
 
-	-- 3. Check if the REBIRTH button is visible (Player is at Max Level)
-	local rebirthLabel = findVisibleLabelByExactText("REBIRTH")
-	local rebirthBtn = getClickableFromLabel(rebirthLabel)
-	if rebirthBtn then
-		logStatus("Max Level Reached!", "REBIRTH button detected. Clicking REBIRTH...")
-		clickButton(rebirthBtn)
-		task.wait(0.8)
-		busy = false
-		return
-	end
-
-	-- 4. Read current Points and Stat Row levels
-	local points = getAvailablePoints()
-	local agiCur, agiMax, agiBtn, agiMaxed = getStatRowData("Shadow Agility")
-	local reachCur, reachMax, reachBtn, reachMaxed = getStatRowData("Shadow Reach")
-	local expCur, expMax, expBtn, expMaxed = getStatRowData("Player Experience")
-
-	if not (agiCur and reachCur and expCur) then
-		logStatus("Reading Stats...", "Waiting for stat rows to load...")
-		busy = false
-		return
-	end
-
-	local summary = string.format(
-		"Pts: %d | Agi: %d | Reach: %d | Exp: %d/%d",
-		points, agiCur, reachCur, expCur, expMax
-	)
-
-	-- Wait if there are 0 points to spend right now
-	if points <= 0 then
-		logStatus("Waiting for Level Up / Rebirth", summary)
-		busy = false
-		return
-	end
-
-	-- Step 1: Add 200 stats to Shadow Agility in one click
-	local agiGoal = math.min(AGILITY_TARGET, agiMax)
-	if agiCur < agiGoal and not agiMaxed and agiBtn then
-		local needed = agiGoal - agiCur
-		local toAdd = math.min(points, needed)
-		allocateStatOnce("Step 1: Shadow Agility -> 200", toAdd, agiBtn, summary)
-		busy = false
-		return
-	end
-
-	-- Step 2: Add 800 stats to Shadow Reach (Shadow Range) in one click
-	local reachInitialGoal = math.min(INITIAL_RANGE_TARGET, reachMax)
-	if reachCur < reachInitialGoal and not reachMaxed and reachBtn then
-		local needed = reachInitialGoal - reachCur
-		local toAdd = math.min(points, needed)
-		allocateStatOnce("Step 2: Shadow Reach -> 800", toAdd, reachBtn, summary)
-		busy = false
-		return
-	end
-
-	-- Step 3: Add all remaining points to Player Experience until MAX in one click
-	if not expMaxed and expCur < expMax and expBtn then
-		local needed = expMax - expCur
-		local toAdd = math.min(points, needed)
-		allocateStatOnce("Step 3: Maxing Player Experience", toAdd, expBtn, summary)
-		busy = false
-		return
-	end
-
-	-- Step 4: Add excess points earned from leveling up to Shadow Reach in one click
-	if not reachMaxed and reachCur < reachMax and reachBtn then
-		local needed = reachMax - reachCur
-		local toAdd = math.min(points, needed)
-		allocateStatOnce("Step 4: Excess -> Shadow Reach", toAdd, reachBtn, summary)
-		busy = false
-		return
-	end
-
-	logStatus("Stats Maxed! Waiting for Max Player Level", summary)
 	busy = false
 end
 
@@ -422,8 +567,9 @@ startButton.MouseButton1Click:Connect(function()
 	active = not active
 	startButton.Text = active and "STOP" or "START"
 	if active then
-		logStatus("Automation Started", "Scanning Stats window...")
-		task.spawn(stepAutomation)
+		lastSyncTime = 0 -- Force an immediate initial sync on start
+		logStatus("Background Mode Started", "Syncing Stats state...")
+		task.spawn(stepBackgroundAutomation)
 	else
 		logStatus("Automation Paused", "Click START to resume")
 	end
@@ -435,12 +581,12 @@ closeButton.MouseButton1Click:Connect(function()
 	gui:Destroy()
 end)
 
--- Main Background Loop
+-- Background Monitor Loop
 task.spawn(function()
 	while alive and gui.Parent do
-		task.wait(0.4)
+		task.wait(0.5)
 		if alive and active and not busy then
-			stepAutomation()
+			stepBackgroundAutomation()
 		end
 	end
 end)
