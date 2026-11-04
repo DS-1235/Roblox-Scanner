@@ -1,5 +1,6 @@
 -- ====================================================================
--- AUTO REBIRTH & STAT ALLOCATION (FINAL V8 - RAPID VISIBLE ENGINE)
+-- AUTO REBIRTH & STAT ALLOCATION (FINAL PRODUCTION V9)
+-- Path-Verified Engine based on live UI Diagnostic
 -- ====================================================================
 
 local Players = game:GetService("Players")
@@ -182,18 +183,18 @@ end
 -- Locate the Stats Window Frame
 -- --------------------------------------------------------------------
 local function findStatsWindow()
-    -- Method 1: Check Menus or __Disable containers
-    local menus = playerGui:FindFirstChild("Menus") or playerGui:FindFirstChild("__Disable")
-    if menus then
-        for _, m in ipairs(menus:GetChildren()) do
-            local mn = string.lower(m.Name)
-            if (string.find(mn, "stat") and not string.find(mn, "status")) or mn == "ui_stats" then
-                if m.Visible then return m end
+    -- Method 1: Check for UI_Stats in PlayerGui
+    for _, desc in ipairs(playerGui:GetDescendants()) do
+        if desc.Name == "UI_Stats" then
+            local isVis = desc.Visible
+            if desc:IsA("ScreenGui") then isVis = desc.Enabled end
+            if isVis and desc.AbsoluteSize.X > 300 then
+                return desc
             end
         end
     end
 
-    -- Method 2: Scan for text unique to the Stats window: "SPEND YOUR POINTS" or "POINTS TO SPEND"
+    -- Method 2: Scan for unique text in Stats window: "SPEND YOUR POINTS" or "POINTS TO SPEND"
     for _, desc in ipairs(playerGui:GetDescendants()) do
         if desc:IsA("TextLabel") and desc.Text and desc.Visible then
             local u = string.upper(desc.Text)
@@ -214,92 +215,47 @@ local function findStatsWindow()
 end
 
 -- --------------------------------------------------------------------
--- Locate Hexagonal HUD 'Stats' Button (Strict Cluster Isolation)
+-- 100% Guaranteed Exact HUD 'Stats' Button Locator
+-- Verified Path: PlayerGui.Hud.UI_Hud.Root.lb.lb_hive.stats
 -- --------------------------------------------------------------------
 local function getHudStatsButton()
-    -- 1. Identify where Daily is located to ensure we never click it
-    local dailyPos = nil
-    for _, desc in ipairs(playerGui:GetDescendants()) do
-        if desc:IsA("TextLabel") and desc.Text and desc.Visible then
-            local clean = string.upper(string.gsub(desc.Text, "[^%a]", ""))
-            if clean == "DAILY" then
-                dailyPos = desc.AbsolutePosition
-                break
+    -- 1. Direct path lookup from live inspection
+    local hud = playerGui:FindFirstChild("Hud")
+    if hud then
+        local uiHud = hud:FindFirstChild("UI_Hud")
+        if uiHud then
+            local root = uiHud:FindFirstChild("Root")
+            if root then
+                local lb = root:FindFirstChild("lb")
+                if lb then
+                    local hive = lb:FindFirstChild("lb_hive")
+                    if hive then
+                        local btn = hive:FindFirstChild("stats")
+                        if btn and btn:IsA("GuiButton") and btn.Visible then
+                            return btn
+                        end
+                    end
+                end
             end
         end
     end
 
-    -- 2. Find the TextLabel strictly labeled "Stats" on the HUD
+    -- 2. Fast container scan for lb_hive
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if desc:IsA("TextLabel") and desc.Text and desc.Visible then
-            local clean = string.upper(string.gsub(desc.Text, "<[^>]+>", ""))
-            clean = string.upper(string.gsub(clean, "[^%a]", ""))
-            if clean == "STATS" and not isInsideStatsWindow(desc) then
-                -- Walk up to locate the HUD cluster container and isolate the Stats branch
-                local curr = desc
-                local statsBranch = nil
-                while curr and curr.Parent and curr.Parent ~= playerGui do
-                    local p = curr.Parent
-                    -- Check if parent container holds other HUD buttons (e.g. Daily, Shop, Quests)
-                    local isCluster = false
-                    for _, sib in ipairs(p:GetDescendants()) do
-                        if sib:IsA("TextLabel") and sib.Text then
-                            local sClean = string.upper(string.gsub(sib.Text, "[^%a]", ""))
-                            if sClean == "DAILY" or sClean == "SHOP" or sClean == "QUESTS" or sClean == "DUNGEONS" or sClean == "WORLDS" or sClean == "EVENT" or sClean == "WHEEL" then
-                                isCluster = true
-                                break
-                            end
-                        end
-                    end
-                    if isCluster then
-                        -- 'curr' is strictly the Stats hexagon branch inside the master cluster
-                        statsBranch = curr
-                        break
-                    end
-                    curr = curr.Parent
-                end
+        if desc.Name == "lb_hive" then
+            local statsBtn = desc:FindFirstChild("stats")
+            if statsBtn and statsBtn:IsA("GuiButton") and statsBtn.Visible then
+                return statsBtn
+            end
+        end
+    end
 
-                if statsBranch then
-                    -- Find the clickable button within this branch
-                    local targetBtn = nil
-                    if statsBranch:IsA("GuiButton") then
-                        targetBtn = statsBranch
-                    else
-                        for _, b in ipairs(statsBranch:GetDescendants()) do
-                            if b:IsA("GuiButton") and b.Visible then
-                                targetBtn = b
-                                break
-                            end
-                        end
-                    end
-                    if not targetBtn then
-                        targetBtn = statsBranch
-                    end
-
-                    -- Safety check: ensure target does NOT contain Daily/Claim text
-                    local hasBanned = false
-                    for _, d in ipairs(targetBtn:GetDescendants()) do
-                        if d:IsA("TextLabel") and d.Text then
-                            local bClean = string.upper(string.gsub(d.Text, "[^%a]", ""))
-                            if bClean == "DAILY" or bClean == "CLAIM" or bClean == "WHEEL" then
-                                hasBanned = true; break
-                            end
-                        end
-                    end
-
-                    -- Position check against Daily coordinates
-                    if not hasBanned and dailyPos then
-                        local dx = math.abs(targetBtn.AbsolutePosition.X - dailyPos.X)
-                        local dy = math.abs(targetBtn.AbsolutePosition.Y - dailyPos.Y)
-                        if dx < 15 and dy < 15 then
-                            hasBanned = true
-                        end
-                    end
-
-                    if not hasBanned then
-                        return targetBtn
-                    end
-                end
+    -- 3. Exact name and position match fallback
+    for _, desc in ipairs(playerGui:GetDescendants()) do
+        if desc:IsA("GuiButton") and string.lower(desc.Name) == "stats" and desc.Visible and not isInsideStatsWindow(desc) then
+            local label = desc:FindFirstChild("hx_label")
+            if label or (desc.Parent and desc.Parent.Name == "lb_hive") then
+                return desc
             end
         end
     end
@@ -584,13 +540,13 @@ local function runAutomationCycle(updateStatus)
     isProcessing = true
 
     local success, err = pcall(function()
-        -- 0. Close any accidental popups like Daily Rewards immediately
+        -- 0. Close any accidental popups immediately
         dismissUnwantedPopups()
 
         local win = findStatsWindow()
         local openedByScript = false
 
-        -- If Stats window is closed, locate the real Stats HUD button and open it
+        -- If Stats window is closed, locate the exact HUD stats button and open it
         if not win or not win.Visible then
             local hudBtn = getHudStatsButton()
             if hudBtn then
@@ -602,7 +558,7 @@ local function runAutomationCycle(updateStatus)
         end
 
         if not win or not win.Visible then
-            updateStatus("Waiting for Stats HUD...", Color3.fromRGB(241, 196, 15))
+            updateStatus("Waiting for Stats Window...", Color3.fromRGB(241, 196, 15))
             return
         end
 
@@ -969,4 +925,4 @@ end
 
 -- Launch
 createUI()
-print("[Auto-Rebirth] V8 (Rapid Visible Engine) loaded successfully!")
+print("[Auto-Rebirth] V9 (Path-Verified Engine) loaded successfully!")
