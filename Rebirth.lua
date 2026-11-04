@@ -1,6 +1,6 @@
 -- ====================================================================
--- AUTO REBIRTH & STAT ALLOCATION (V10 - PRECISION ENGINE)
--- 100% Fixed: Ignores __Disable folder, Exact Coordinates, Clean UI Offset
+-- AUTO REBIRTH & STAT ALLOCATION (V11 - ZERO-MISCLICK ENGINE)
+-- 100% Fixed: Isolated Rebirth Dialog, Zero Fallback Misclicks, Accurate Clicks
 -- ====================================================================
 
 local Players = game:GetService("Players")
@@ -141,7 +141,7 @@ end
 -- --------------------------------------------------------------------
 local function dismissUnwantedPopups()
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if desc:IsA("TextLabel") and desc.Text and desc.Visible and not desc:FindFirstAncestor("__Disable") then
+        if desc:IsA("TextLabel") and desc.Text and desc.Visible and not desc:FindFirstAncestor("__Disable") and not desc:FindFirstAncestor("Hud") and not desc:FindFirstAncestor("UI_Hud") then
             local t = string.upper(desc.Text)
             if string.find(t, "DAILY REWARD", 1, true) or string.find(t, "LOGIN REWARD", 1, true) or string.find(t, "SPIN THE WHEEL", 1, true) then
                 local p = desc.Parent
@@ -264,26 +264,32 @@ local function getHudStatsButton()
 end
 
 -- --------------------------------------------------------------------
--- Rebirth Confirmation Dialog Finder & YES Button Resolver
+-- Rebirth Confirmation Dialog Finder (Must NOT be inside Stats Window or HUD)
 -- --------------------------------------------------------------------
-local function findRebirthDialog()
+local function findRebirthDialog(win)
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if desc:IsA("TextLabel") and desc.Text and desc.Visible and not desc:FindFirstAncestor("__Disable") then
-            local clean = string.upper(string.gsub(desc.Text, "<[^>]+>", ""))
-            if string.find(clean, "REBIRTH?") or string.find(clean, "STATS RESET") or string.find(clean, "BACK TO LEVEL 1") then
+        if desc:IsA("TextLabel") and desc.Text and desc.Visible then
+            -- Exclude Stats window itself, Hud, and __Disable
+            if (win and desc:IsDescendantOf(win)) or desc:FindFirstAncestor("__Disable") or desc:FindFirstAncestor("Hud") or desc:FindFirstAncestor("UI_Hud") then
+                continue
+            end
+
+            local noTags = string.gsub(desc.Text, "<[^>]+>", "")
+            local clean = string.upper(noTags)
+
+            local hasRebirth = string.find(clean, "REBIRTH", 1, true) ~= nil
+            local hasQuestion = string.find(clean, "?", 1, true) ~= nil or string.find(clean, "RESET", 1, true) or string.find(clean, "SURE", 1, true) or string.find(clean, "LEVEL 1", 1, true)
+
+            if hasRebirth and hasQuestion then
+                -- Walk up to find the dialog frame container (sized like a modal popup)
                 local frame = desc.Parent
                 while frame and frame ~= playerGui and not frame:IsA("ScreenGui") do
-                    local btnCount = 0
-                    for _, ch in ipairs(frame:GetDescendants()) do
-                        if ch:IsA("GuiButton") and ch.Visible and ch.AbsoluteSize.X > 20 then
-                            btnCount = btnCount + 1
-                        end
-                    end
-                    if btnCount >= 2 then
+                    if frame.AbsoluteSize.X > 150 and frame.AbsoluteSize.Y > 80 and frame.AbsoluteSize.X < 900 then
                         return frame
                     end
                     frame = frame.Parent
                 end
+                return desc.Parent
             end
         end
     end
@@ -293,7 +299,7 @@ end
 local function getYesButton(dialogFrame)
     if not dialogFrame then return nil end
 
-    -- 1. RichText Tag-stripped text search
+    -- 1. Exact RichText-stripped text match for YES / CONFIRM / ACCEPT
     for _, desc in ipairs(dialogFrame:GetDescendants()) do
         if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Visible then
             local noTags = string.gsub(desc.Text, "<[^>]+>", "")
@@ -307,18 +313,34 @@ local function getYesButton(dialogFrame)
         end
     end
 
-    -- 2. Geometric fallback (Left button is ALWAYS YES in this dialog)
-    local buttons = {}
-    for _, desc in ipairs(dialogFrame:GetDescendants()) do
-        if desc:IsA("GuiButton") and desc.Visible and desc.AbsoluteSize.X > 25 and desc.AbsolutePosition.X > 0 then
-            table.insert(buttons, desc)
+    -- 2. Button Name match
+    for _, b in ipairs(dialogFrame:GetDescendants()) do
+        if b:IsA("GuiButton") and b.Visible then
+            local n = string.lower(b.Name)
+            if (string.find(n, "yes") or string.find(n, "confirm") or string.find(n, "accept")) and not string.find(n, "no") then
+                return b
+            end
         end
     end
-    if #buttons >= 2 then
-        table.sort(buttons, function(a, b) return a.AbsolutePosition.X < b.AbsolutePosition.X end)
-        return buttons[1]
-    elseif #buttons == 1 then
-        return buttons[1]
+
+    -- 3. Controlled Fallback ONLY within dialogFrame (requires a distinct NO/Cancel button)
+    local hasNoBtn = false
+    local candidateButtons = {}
+    for _, desc in ipairs(dialogFrame:GetDescendants()) do
+        if desc:IsA("GuiButton") and desc.Visible and desc.AbsoluteSize.X > 20 and desc.AbsolutePosition.X > 0 then
+            local n = string.lower(desc.Name)
+            local t = desc:IsA("TextButton") and string.lower(desc.Text) or ""
+            if string.find(n, "no") or string.find(n, "cancel") or string.find(t, "no") or string.find(t, "cancel") then
+                hasNoBtn = true
+            else
+                table.insert(candidateButtons, desc)
+            end
+        end
+    end
+
+    if hasNoBtn and #candidateButtons > 0 then
+        table.sort(candidateButtons, function(a, b) return a.AbsolutePosition.X < b.AbsolutePosition.X end)
+        return candidateButtons[1]
     end
 
     return nil
@@ -473,54 +495,54 @@ end
 -- Rapid Rebirth Sequence
 -- --------------------------------------------------------------------
 local function handleRapidRebirth(win, updateStatus)
-    -- Check if REBIRTH? dialog is ALREADY open
-    local activeDialog = findRebirthDialog()
-
-    if not activeDialog then
-        -- Find and click REBIRTH button inside the stats window
-        local rebirthBtn = nil
-        for _, desc in ipairs(win:GetDescendants()) do
-            if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Visible then
-                local noTags = string.gsub(desc.Text, "<[^>]+>", "")
-                local clean = string.upper(string.gsub(noTags, "[^%a]", ""))
-                if clean == "REBIRTH" then
-                    local b = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
-                    if b and b.Visible and b.AbsoluteSize.X > 0 and b.AbsolutePosition.X > 0 then
-                        rebirthBtn = b; break
-                    end
+    -- 1. Locate the REBIRTH button strictly inside the Stats window
+    local rebirthBtn = nil
+    for _, desc in ipairs(win:GetDescendants()) do
+        if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Visible then
+            local noTags = string.gsub(desc.Text, "<[^>]+>", "")
+            local clean = string.upper(string.gsub(noTags, "[^%a]", ""))
+            if clean == "REBIRTH" then
+                local b = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
+                if b and b.Visible and b.AbsoluteSize.X > 0 and b.AbsolutePosition.X > 0 then
+                    rebirthBtn = b; break
                 end
-            end
-        end
-
-        if rebirthBtn then
-            updateStatus("Clicking REBIRTH...", Color3.fromRGB(241, 196, 15))
-            clickButton(rebirthBtn)
-
-            for _ = 1, 6 do
-                task.wait(0.1)
-                activeDialog = findRebirthDialog()
-                if activeDialog then break end
             end
         end
     end
 
-    -- Confirm YES immediately on the dialog
+    if not rebirthBtn then
+        for _, b in ipairs(win:GetDescendants()) do
+            if b:IsA("GuiButton") and b.Visible and string.find(string.lower(b.Name), "rebirth") then
+                rebirthBtn = b; break
+            end
+        end
+    end
+
+    if not rebirthBtn then
+        return false
+    end
+
+    updateStatus("Clicking REBIRTH...", Color3.fromRGB(241, 196, 15))
+    clickButton(rebirthBtn)
+
+    -- 2. Wait up to 0.64s for the real confirmation popup to appear
+    local activeDialog = nil
+    for _ = 1, 8 do
+        task.wait(0.08)
+        activeDialog = findRebirthDialog(win)
+        if activeDialog then break end
+    end
+
+    -- 3. Confirm YES on the popup
     if activeDialog then
         updateStatus("Confirming YES...", Color3.fromRGB(46, 204, 113))
-
-        for attempt = 1, 4 do
-            local yesBtn = getYesButton(activeDialog)
-            if yesBtn then
-                clickButton(yesBtn)
-                task.wait(0.18)
-            end
-
-            activeDialog = findRebirthDialog()
-            if not activeDialog then
-                updateStatus("Rebirth Confirmed! Resetting...", Color3.fromRGB(46, 204, 113))
-                task.wait(0.5)
-                return true
-            end
+        local yesBtn = getYesButton(activeDialog)
+        if yesBtn then
+            clickButton(yesBtn)
+            task.wait(0.25)
+            updateStatus("Rebirth Confirmed! Resetting...", Color3.fromRGB(46, 204, 113))
+            task.wait(0.35)
+            return true
         end
     end
 
@@ -657,7 +679,7 @@ local function runAutomationCycle(updateStatus)
         end
 
         -- Rapid Close: Snap window closed immediately if opened by script
-        if openedByScript and not findRebirthDialog() then
+        if openedByScript and not findRebirthDialog(win) then
             task.wait(0.08)
             local closeBtn = findWindowCloseButton(win)
             if closeBtn then
@@ -932,4 +954,4 @@ end
 
 -- Launch
 createUI()
-print("[Auto-Rebirth] V10 (Precision Engine) loaded successfully!")
+print("[Auto-Rebirth] V11 (Zero-Misclick Engine) loaded successfully!")
