@@ -1,18 +1,16 @@
 -- ====================================================================
--- AUTO REBIRTH & STAT ALLOCATION (V6 - GHOST WINDOW ENGINE)
+-- AUTO REBIRTH & STAT ALLOCATION (RAPID VISIBLE ENGINE)
 -- ====================================================================
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 local GuiService = game:GetService("GuiService")
 local VIM = game:GetService("VirtualInputManager")
-local UserInputService = game:GetService("UserInputService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- --------------------------------------------------------------------
--- Configuration Targets
+-- Configuration
 -- --------------------------------------------------------------------
 local TARGET_AGILITY = 200   -- Priority 1: 200 Shadow Agility
 local TARGET_REACH   = 800   -- Priority 2: 800 Shadow Reach
@@ -21,114 +19,46 @@ local CHECK_INTERVAL = 2.0   -- Check frequency in seconds
 -- System States
 local AutoRebirthEnabled = true
 local isProcessing       = false
-local originalWinPos     = nil
 
 -- --------------------------------------------------------------------
--- Ghost Cloak: Makes UI 100% Invisible to Human Eyes while Clickable
+-- Proven Click Helper (From Working Dungeon Scripts)
 -- --------------------------------------------------------------------
-local function makeGhost(guiObj)
-    if not guiObj then return end
-    for _, d in ipairs(guiObj:GetDescendants()) do
-        if d:IsA("GuiObject") then
-            if not d:GetAttribute("OrigBgTrans") then
-                d:SetAttribute("OrigBgTrans", d.BackgroundTransparency)
-            end
-            d.BackgroundTransparency = 1
-        end
-        if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
-            if not d:GetAttribute("OrigTextTrans") then
-                d:SetAttribute("OrigTextTrans", d.TextTransparency)
-            end
-            d.TextTransparency = 1
-        end
-        if d:IsA("ImageLabel") or d:IsA("ImageButton") then
-            if not d:GetAttribute("OrigImgTrans") then
-                d:SetAttribute("OrigImgTrans", d.ImageTransparency)
-            end
-            d.ImageTransparency = 1
-        end
-        if d:IsA("UIStroke") then
-            if not d:GetAttribute("OrigStrokeTrans") then
-                d:SetAttribute("OrigStrokeTrans", d.Transparency)
-            end
-            d.Transparency = 1
-        end
-    end
-end
-
-local function restoreGhost(guiObj)
-    if not guiObj then return end
-    for _, d in ipairs(guiObj:GetDescendants()) do
-        if d:IsA("GuiObject") and d:GetAttribute("OrigBgTrans") then
-            d.BackgroundTransparency = d:GetAttribute("OrigBgTrans")
-        end
-        if (d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox")) and d:GetAttribute("OrigTextTrans") then
-            d.TextTransparency = d:GetAttribute("OrigTextTrans")
-        end
-        if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and d:GetAttribute("OrigImgTrans") then
-            d.ImageTransparency = d:GetAttribute("OrigImgTrans")
-        end
-        if d:IsA("UIStroke") and d:GetAttribute("OrigStrokeTrans") then
-            d.Transparency = d:GetAttribute("OrigStrokeTrans")
-        end
-    end
-end
-
--- --------------------------------------------------------------------
--- Engine-Level Clicker (Hover -> Press -> Release -> Restore Mouse)
--- --------------------------------------------------------------------
-local function clickGui(btn)
-    if not btn then return end
+local function clickButton(b)
+    if not b then return end
 
     -- 1. firesignal
-    pcall(function()
-        if typeof(firesignal) == "function" then
-            firesignal(btn.Activated)
-            firesignal(btn.MouseButton1Click)
-            firesignal(btn.MouseButton1Down)
-            firesignal(btn.MouseButton1Up)
-        end
-    end)
+    if typeof(firesignal) == "function" then
+        pcall(function() firesignal(b.Activated) end)
+        pcall(function() firesignal(b.MouseButton1Click) end)
+    end
 
     -- 2. getconnections
-    pcall(function()
-        if typeof(getconnections) == "function" then
-            for _, sig in ipairs({btn.Activated, btn.MouseButton1Click, btn.MouseButton1Down, btn.MouseButton1Up}) do
-                for _, c in ipairs(getconnections(sig)) do
-                    if c.Fire then c:Fire() elseif c.Function then c.Function() end
-                end
+    if typeof(getconnections) == "function" then
+        pcall(function()
+            for _, c in ipairs(getconnections(b.Activated)) do
+                if c.Fire then c:Fire() elseif c.Function then c.Function() end
             end
-        end
-    end)
+            for _, c in ipairs(getconnections(b.MouseButton1Click)) do
+                if c.Fire then c:Fire() elseif c.Function then c.Function() end
+            end
+        end)
+    end
 
-    -- 3. VirtualInputManager Native Simulation
+    -- 3. VirtualInputManager (Standard Engine Click)
     pcall(function()
-        if btn.AbsoluteSize.X > 0 and btn.AbsolutePosition.X > 0 and btn.AbsolutePosition.Y > 0 then
+        if b.AbsoluteSize.X > 0 and b.AbsoluteSize.Y > 0 then
             local inset = GuiService:GetGuiInset()
-            local cx = btn.AbsolutePosition.X + (btn.AbsoluteSize.X / 2)
-            local cy = btn.AbsolutePosition.Y + (btn.AbsoluteSize.Y / 2) + inset.Y
-            local origMouse = UserInputService:GetMouseLocation()
-
-            -- Hover over button
-            VIM:SendMouseMoveEvent(cx, cy, game)
-            task.wait(0.04)
-
-            -- Mouse down
+            local cx = b.AbsolutePosition.X + (b.AbsoluteSize.X / 2)
+            local cy = b.AbsolutePosition.Y + (b.AbsoluteSize.Y / 2) + inset.Y
             VIM:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
-            task.wait(0.06)
-
-            -- Mouse up
-            VIM:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
             task.wait(0.04)
-
-            -- Restore original mouse position
-            VIM:SendMouseMoveEvent(origMouse.X, origMouse.Y, game)
+            VIM:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
         end
     end)
 end
 
 -- --------------------------------------------------------------------
--- Authentic TextBox Submission
+-- Authentic TextBox Input
 -- --------------------------------------------------------------------
 local function setCustomAmount(box, amount)
     if not box then return end
@@ -156,7 +86,7 @@ local function setCustomAmount(box, amount)
             end
         end
     end)
-    task.wait(0.1)
+    task.wait(0.08)
 end
 
 -- --------------------------------------------------------------------
@@ -255,7 +185,7 @@ local function findRebirthDialog()
     return nil
 end
 
-local function getYesButtonFromDialog(dialogFrame)
+local function getYesButton(dialogFrame)
     if not dialogFrame then return nil end
 
     -- 1. RichText Tag-stripped text search
@@ -273,7 +203,7 @@ local function getYesButtonFromDialog(dialogFrame)
     -- 2. Geometric fallback (Left button is always YES)
     local buttons = {}
     for _, desc in ipairs(dialogFrame:GetDescendants()) do
-        if desc:IsA("GuiButton") and desc.Visible and desc.AbsoluteSize.X > 30 and desc.AbsolutePosition.X > 0 then
+        if desc:IsA("GuiButton") and desc.Visible and desc.AbsoluteSize.X > 25 and desc.AbsolutePosition.X > 0 then
             table.insert(buttons, desc)
         end
     end
@@ -435,19 +365,10 @@ local function getStatRow(win, statName)
 end
 
 -- --------------------------------------------------------------------
--- Ghost Rebirth Execution (100% Invisible to Player)
+-- Rapid Rebirth Sequence
 -- --------------------------------------------------------------------
-local function handleGhostRebirth(win, updateStatus)
-    -- Direct Network Remote Probe
-    pcall(function()
-        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-            if obj:IsA("RemoteEvent") and string.find(string.lower(obj.Name), "rebirth") then
-                obj:FireServer()
-            end
-        end
-    end)
-
-    -- Check if REBIRTH? dialog is currently open
+local function handleRapidRebirth(win, updateStatus)
+    -- Check if REBIRTH? dialog is ALREADY open
     local activeDialog = findRebirthDialog()
 
     if not activeDialog then
@@ -466,34 +387,32 @@ local function handleGhostRebirth(win, updateStatus)
         end
 
         if rebirthBtn then
-            updateStatus("Rebirth Ready! Triggering...", Color3.fromRGB(241, 196, 15))
-            clickGui(rebirthBtn)
+            updateStatus("Clicking REBIRTH...", Color3.fromRGB(241, 196, 15))
+            clickButton(rebirthBtn)
 
-            -- Wait for popup to open
-            for _ = 1, 8 do
-                task.wait(0.2)
+            for _ = 1, 6 do
+                task.wait(0.12)
                 activeDialog = findRebirthDialog()
                 if activeDialog then break end
             end
         end
     end
 
-    -- If confirmation dialog appears, cloak it instantly and click YES
+    -- Confirm YES immediately on the dialog
     if activeDialog then
-        makeGhost(activeDialog)
-        updateStatus("Confirming YES (Invisible)...", Color3.fromRGB(46, 204, 113))
+        updateStatus("Confirming YES...", Color3.fromRGB(46, 204, 113))
 
         for attempt = 1, 4 do
-            local yesBtn = getYesButtonFromDialog(activeDialog)
+            local yesBtn = getYesButton(activeDialog)
             if yesBtn then
-                clickGui(yesBtn)
-                task.wait(0.3)
+                clickButton(yesBtn)
+                task.wait(0.2)
             end
 
             activeDialog = findRebirthDialog()
             if not activeDialog then
-                updateStatus("Rebirth Complete! Resetting...", Color3.fromRGB(46, 204, 113))
-                task.wait(1.0)
+                updateStatus("Rebirth Confirmed! Resetting...", Color3.fromRGB(46, 204, 113))
+                task.wait(0.6)
                 return true
             end
         end
@@ -508,7 +427,7 @@ end
 local updateLiveStatsWidget = nil
 
 -- --------------------------------------------------------------------
--- Main Automation Cycle (Ghost Mode)
+-- Rapid Execution Cycle (< 0.8s Total)
 -- --------------------------------------------------------------------
 local function runAutomationCycle(updateStatus)
     if isProcessing then return end
@@ -518,13 +437,13 @@ local function runAutomationCycle(updateStatus)
         local win = findStatsWindow()
         local openedByScript = false
 
-        -- If Stats window is closed, open it via HUD button
+        -- If Stats window is closed, open it rapidly via HUD button
         if not win or not win.Visible then
             local hudBtn = getHudStatsButton()
             if hudBtn then
                 openedByScript = true
-                clickGui(hudBtn)
-                task.wait(0.35)
+                clickButton(hudBtn)
+                task.wait(0.18)
                 win = findStatsWindow()
             end
         end
@@ -534,23 +453,15 @@ local function runAutomationCycle(updateStatus)
             return
         end
 
-        -- Ensure window is positioned on screen for VIM, but 100% transparent
-        if win:IsA("GuiObject") then
-            if win.Position.X.Scale >= 4 then
-                win.Position = UDim2.fromScale(0.5, 0.5)
-            end
-            makeGhost(win)
-        end
-
         -- Refresh Live Stats Widget
         if updateLiveStatsWidget then
             updateLiveStatsWidget(win)
         end
 
-        -- 1. Ghost Rebirth Execution
-        local didRebirth = handleGhostRebirth(win, updateStatus)
+        -- 1. Rapid Rebirth Check & Confirmation
+        local didRebirth = handleRapidRebirth(win, updateStatus)
         if didRebirth then
-            task.wait(0.8)
+            task.wait(0.4)
             if updateLiveStatsWidget then updateLiveStatsWidget(win) end
         end
 
@@ -559,7 +470,7 @@ local function runAutomationCycle(updateStatus)
         local customBox = getCustomBox(win)
 
         if points > 0 and customBox then
-            updateStatus(string.format("Spending %d points (Invisible)...", points), Color3.fromRGB(52, 152, 219))
+            updateStatus(string.format("Spending %d points...", points), Color3.fromRGB(52, 152, 219))
 
             -- Priority 1: Shadow Agility (Target 200)
             local agi = getStatRow(win, "Shadow Agility")
@@ -569,10 +480,9 @@ local function runAutomationCycle(updateStatus)
                 if toSpend > 0 then
                     updateStatus(string.format("Adding %d to Agility (%d/%d)...", toSpend, agi.current, TARGET_AGILITY), Color3.fromRGB(46, 204, 113))
                     setCustomAmount(customBox, toSpend)
-                    task.wait(0.08)
                     local freshAgi = getStatRow(win, "Shadow Agility")
-                    if freshAgi and freshAgi.button then clickGui(freshAgi.button) end
-                    task.wait(0.18)
+                    if freshAgi and freshAgi.button then clickButton(freshAgi.button) end
+                    task.wait(0.08)
                     points = getAvailablePoints(win)
                     if updateLiveStatsWidget then updateLiveStatsWidget(win) end
                 end
@@ -587,10 +497,9 @@ local function runAutomationCycle(updateStatus)
                     if toSpend > 0 then
                         updateStatus(string.format("Adding %d to Reach (%d/%d)...", toSpend, rch.current, TARGET_REACH), Color3.fromRGB(46, 204, 113))
                         setCustomAmount(customBox, toSpend)
-                        task.wait(0.08)
                         local freshRch = getStatRow(win, "Shadow Reach")
-                        if freshRch and freshRch.button then clickGui(freshRch.button) end
-                        task.wait(0.18)
+                        if freshRch and freshRch.button then clickButton(freshRch.button) end
+                        task.wait(0.08)
                         points = getAvailablePoints(win)
                         if updateLiveStatsWidget then updateLiveStatsWidget(win) end
                     end
@@ -606,10 +515,9 @@ local function runAutomationCycle(updateStatus)
                     if toSpend > 0 then
                         updateStatus(string.format("Adding %d to Player Exp (%d/%d)...", toSpend, exp.current, exp.max), Color3.fromRGB(46, 204, 113))
                         setCustomAmount(customBox, toSpend)
-                        task.wait(0.08)
                         local freshExp = getStatRow(win, "Player Experience")
-                        if freshExp and freshExp.button then clickGui(freshExp.button) end
-                        task.wait(0.18)
+                        if freshExp and freshExp.button then clickButton(freshExp.button) end
+                        task.wait(0.08)
                         points = getAvailablePoints(win)
                         if updateLiveStatsWidget then updateLiveStatsWidget(win) end
                     end
@@ -624,24 +532,23 @@ local function runAutomationCycle(updateStatus)
                     if rch and not rch.isMax and rch.current < rch.max then
                         updateStatus(string.format("Exp MAX! Overflow %d to Reach...", points), Color3.fromRGB(155, 89, 182))
                         setCustomAmount(customBox, points)
-                        task.wait(0.08)
                         local freshRch = getStatRow(win, "Shadow Reach")
-                        if freshRch and freshRch.button then clickGui(freshRch.button) end
-                        task.wait(0.18)
+                        if freshRch and freshRch.button then clickButton(freshRch.button) end
+                        task.wait(0.08)
                         if updateLiveStatsWidget then updateLiveStatsWidget(win) end
                     end
                 end
             end
         else
-            updateStatus("Active (Points: 0 | Monitoring)", Color3.fromRGB(230, 230, 230))
+            updateStatus("Active (Monitoring Level & Stats)", Color3.fromRGB(230, 230, 230))
         end
 
-        -- Safe Close: Close window only if opened by script AND no Rebirth dialog is open
+        -- Rapid Close: Close window immediately if opened by script AND no Rebirth dialog open
         if openedByScript and not findRebirthDialog() then
-            task.wait(0.15)
+            task.wait(0.1)
             for _, d in ipairs(win:GetDescendants()) do
                 if d:IsA("GuiButton") and (d.Name == "Close" or (d:IsA("TextButton") and d.Text == "X")) then
-                    clickGui(d)
+                    clickButton(d)
                     break
                 end
             end
@@ -708,7 +615,7 @@ local function createUI()
     TitleLabel.Position = UDim2.fromOffset(10, 0)
     TitleLabel.BackgroundTransparency = 1
     TitleLabel.Font = Enum.Font.GothamBold
-    TitleLabel.Text = "⚡ Auto Rebirth (Ghost)"
+    TitleLabel.Text = "⚡ Rapid Auto Rebirth"
     TitleLabel.TextColor3 = Color3.fromRGB(240, 240, 240)
     TitleLabel.TextSize = 13
     TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -724,8 +631,6 @@ local function createUI()
     local CloseCorner = Instance.new("UICorner", CloseBtn)
     CloseCorner.CornerRadius = UDim.new(0, 6)
     CloseBtn.MouseButton1Click:Connect(function()
-        local win = findStatsWindow()
-        if win then restoreGhost(win) end
         ScreenGui:Destroy()
     end)
 
@@ -865,7 +770,7 @@ local function createUI()
     ManualBtn.Position = UDim2.fromOffset(10, 178)
     ManualBtn.BackgroundColor3 = Color3.fromRGB(230, 126, 34)
     ManualBtn.Font = Enum.Font.GothamBold
-    ManualBtn.Text = "▶ Run Check Now"
+    ManualBtn.Text = "▶ Run Rapid Check Now"
     ManualBtn.TextColor3 = Color3.new(1, 1, 1)
     ManualBtn.TextSize = 11
     local ManualCorner = Instance.new("UICorner", ManualBtn)
@@ -883,14 +788,14 @@ local function createUI()
     FooterLabel.Position = UDim2.fromOffset(10, 214)
     FooterLabel.BackgroundTransparency = 1
     FooterLabel.Font = Enum.Font.Gotham
-    FooterLabel.Text = "Ghost Mode: Agi 200 → Reach 800 → Exp MAX"
+    FooterLabel.Text = "Target: Agi 200 → Reach 800 → Exp MAX"
     FooterLabel.TextColor3 = Color3.fromRGB(120, 140, 170)
     FooterLabel.TextSize = 9
     FooterLabel.TextXAlignment = Enum.TextXAlignment.Center
 
     -- Background Execution Loop
     task.spawn(function()
-        updateStatusText("Ready (Ghost)", Color3.fromRGB(46, 204, 113))
+        updateStatusText("Ready (Active)", Color3.fromRGB(46, 204, 113))
         while ScreenGui.Parent do
             task.wait(CHECK_INTERVAL)
             if AutoRebirthEnabled then
@@ -902,4 +807,4 @@ end
 
 -- Launch
 createUI()
-print("[Auto-Rebirth] V6 (Ghost Engine) loaded successfully!")
+print("[Auto-Rebirth] Rapid Engine loaded successfully!")
