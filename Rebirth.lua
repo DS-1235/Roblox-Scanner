@@ -34,7 +34,7 @@ infoLabel.TextColor3 = Color3.new(1, 1, 1)
 infoLabel.TextSize = 12
 infoLabel.TextWrapped = true
 infoLabel.TextYAlignment = Enum.TextYAlignment.Top
-infoLabel.Text = "Auto Rebirth & Stats: Ready\nClick START to begin"
+infoLabel.Text = "Auto Rebirth & Stats (1-Click Input): Ready\nClick START to begin"
 infoLabel.Parent = frame
 
 local function createButton(text, xOffset, width)
@@ -55,11 +55,10 @@ local active = false
 local alive = true
 local busy = false
 local rebirthCount = 0
-local currentMultiplier = nil
 
 local AGILITY_TARGET = 200
 local INITIAL_RANGE_TARGET = 800
-local CLICK_DELAY = 0.25
+local ACTION_DELAY = 0.35
 
 local function logStatus(stageText, detailText)
 	local msg = string.format(
@@ -104,7 +103,7 @@ local function clickButton(btn)
 		local cx = btn.AbsolutePosition.X + (btn.AbsoluteSize.X / 2)
 		local cy = btn.AbsolutePosition.Y + (btn.AbsoluteSize.Y / 2) + inset.Y
 		VIM:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
-		task.wait(0.04)
+		task.wait(0.05)
 		VIM:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
 	end
 end
@@ -179,32 +178,70 @@ local function getAvailablePoints()
 	return 0
 end
 
--- Selects x1, x10, or x100 multiplier button at the top of the Stats window
-local function selectMultiplier(multText)
-	if currentMultiplier == multText then
-		return true
+-- Finds the custom stat amount TextBox located next to the "Talents" and "x1" buttons
+local function findAmountInputBox()
+	local anchor = findVisibleLabelByExactText("Talents") or findVisibleLabelByExactText("x1")
+	if anchor then
+		local topBar = anchor.Parent
+		for _ = 1, 4 do
+			if topBar and topBar ~= playerGui then
+				for _, desc in ipairs(topBar:GetDescendants()) do
+					if not desc:IsDescendantOf(gui) and desc:IsA("TextBox") and isVisible(desc) then
+						return desc
+					end
+				end
+				topBar = topBar.Parent
+			end
+		end
 	end
-	local lbl = findVisibleLabelByExactText(multText)
-	local btn = getClickableFromLabel(lbl)
-	if btn then
-		clickButton(btn)
-		currentMultiplier = multText
-		task.wait(0.15)
-		return true
+
+	-- Fallback: find any visible TextBox inside PlayerGui (excluding our script UI)
+	for _, desc in ipairs(playerGui:GetDescendants()) do
+		if not desc:IsDescendantOf(gui) and desc:IsA("TextBox") and isVisible(desc) then
+			return desc
+		end
 	end
-	return false
+	return nil
 end
 
--- Chooses the largest safe multiplier so we never overshoot target levels
-local function setBestMultiplier(points, needed)
-	local allow = math.min(points, needed)
-	if allow >= 100 then
-		selectMultiplier("x100")
-	elseif allow >= 10 then
-		selectMultiplier("x10")
-	else
-		selectMultiplier("x1")
+-- Enters the exact stat amount into the top TextBox so 1 click allocates that amount
+local function setCustomAmount(amount)
+	local targetInt = math.max(1, math.floor(amount))
+	local targetStr = tostring(targetInt)
+
+	local box = findAmountInputBox()
+	if not box then
+		warn("[AutoRebirth] Could not find the custom amount TextBox!")
+		return false
 	end
+
+	local currentVal = tonumber((string.gsub(box.Text or "", "[,%s]", "")))
+	if currentVal == targetInt then
+		return true
+	end
+
+	pcall(function()
+		box:CaptureFocus()
+	end)
+	task.wait(0.05)
+
+	box.Text = targetStr
+	task.wait(0.05)
+
+	if typeof(firesignal) == "function" then
+		pcall(function() firesignal(box.FocusLost, true) end)
+	end
+	pcall(function()
+		box:ReleaseFocus(true)
+	end)
+
+	-- Send Return key in case the game listens to Enter key release
+	VIM:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+	task.wait(0.04)
+	VIM:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+	task.wait(0.2)
+
+	return true
 end
 
 -- Locates a stat row ("Shadow Agility", "Shadow Reach", "Player Experience")
@@ -213,7 +250,6 @@ local function getStatRowData(statTitle)
 	local titleLabel = findVisibleLabelByExactText(statTitle)
 	if not titleLabel then return nil end
 
-	-- Walk up parents to find the individual row container holding "Lv X / Y" and the green button
 	local row = titleLabel.Parent
 	while row and row ~= playerGui do
 		local curLv, maxLv = nil, nil
@@ -231,7 +267,6 @@ local function getStatRowData(statTitle)
 			end
 		end
 
-		-- If we found the Lv X / Y label in this container, locate the row's upgrade button
 		if curLv and maxLv then
 			for _, desc in ipairs(row:GetDescendants()) do
 				if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and isVisible(desc) then
@@ -261,6 +296,15 @@ local function getStatRowData(statTitle)
 	return nil
 end
 
+-- Allocates `amount` points to the given row button in a single click
+local function allocateStatOnce(stageName, amount, upgradeBtn, summary)
+	if setCustomAmount(amount) then
+		logStatus(stageName .. " (+" .. tostring(amount) .. ")", summary)
+		clickButton(upgradeBtn)
+		task.wait(ACTION_DELAY)
+	end
+end
+
 -- Main Automation Step
 local function stepAutomation()
 	if busy then return end
@@ -275,7 +319,6 @@ local function stepAutomation()
 			logStatus("Confirming Rebirth", "Clicking YES on confirmation popup...")
 			clickButton(yesBtn)
 			rebirthCount += 1
-			currentMultiplier = nil
 			task.wait(1.5)
 			busy = false
 			return
@@ -325,60 +368,52 @@ local function stepAutomation()
 		points, agiCur, reachCur, expCur, expMax
 	)
 
-	-- If no points to spend right now, wait for level-ups or max level Rebirth button
+	-- Wait if there are 0 points to spend right now
 	if points <= 0 then
 		logStatus("Waiting for Level Up / Rebirth", summary)
 		busy = false
 		return
 	end
 
-	-- Priority 1: Add 200 stats to Shadow Agility
+	-- Step 1: Add 200 stats to Shadow Agility in one click
 	local agiGoal = math.min(AGILITY_TARGET, agiMax)
 	if agiCur < agiGoal and not agiMaxed and agiBtn then
 		local needed = agiGoal - agiCur
-		setBestMultiplier(points, needed)
-		logStatus("Step 1: Shadow Agility -> 200", summary)
-		clickButton(agiBtn)
-		task.wait(CLICK_DELAY)
+		local toAdd = math.min(points, needed)
+		allocateStatOnce("Step 1: Shadow Agility -> 200", toAdd, agiBtn, summary)
 		busy = false
 		return
 	end
 
-	-- Priority 2: Add 800 stats to Shadow Reach (Shadow Range)
+	-- Step 2: Add 800 stats to Shadow Reach (Shadow Range) in one click
 	local reachInitialGoal = math.min(INITIAL_RANGE_TARGET, reachMax)
 	if reachCur < reachInitialGoal and not reachMaxed and reachBtn then
 		local needed = reachInitialGoal - reachCur
-		setBestMultiplier(points, needed)
-		logStatus("Step 2: Shadow Reach -> 800", summary)
-		clickButton(reachBtn)
-		task.wait(CLICK_DELAY)
+		local toAdd = math.min(points, needed)
+		allocateStatOnce("Step 2: Shadow Reach -> 800", toAdd, reachBtn, summary)
 		busy = false
 		return
 	end
 
-	-- Priority 3: All remaining points into Player Experience until MAX
+	-- Step 3: Add all remaining points to Player Experience until MAX in one click
 	if not expMaxed and expCur < expMax and expBtn then
 		local needed = expMax - expCur
-		setBestMultiplier(points, needed)
-		logStatus("Step 3: Maxing Player Experience", summary)
-		clickButton(expBtn)
-		task.wait(CLICK_DELAY)
+		local toAdd = math.min(points, needed)
+		allocateStatOnce("Step 3: Maxing Player Experience", toAdd, expBtn, summary)
 		busy = false
 		return
 	end
 
-	-- Priority 4: Spend excess leveling points into Shadow Reach (Shadow Range)
+	-- Step 4: Add excess points earned from leveling up to Shadow Reach in one click
 	if not reachMaxed and reachCur < reachMax and reachBtn then
 		local needed = reachMax - reachCur
-		setBestMultiplier(points, needed)
-		logStatus("Step 4: Excess -> Shadow Reach", summary)
-		clickButton(reachBtn)
-		task.wait(CLICK_DELAY)
+		local toAdd = math.min(points, needed)
+		allocateStatOnce("Step 4: Excess -> Shadow Reach", toAdd, reachBtn, summary)
 		busy = false
 		return
 	end
 
-	logStatus("Stats Allocated! Waiting for Max Level", summary)
+	logStatus("Stats Maxed! Waiting for Max Player Level", summary)
 	busy = false
 end
 
@@ -387,7 +422,6 @@ startButton.MouseButton1Click:Connect(function()
 	active = not active
 	startButton.Text = active and "STOP" or "START"
 	if active then
-		currentMultiplier = nil
 		logStatus("Automation Started", "Scanning Stats window...")
 		task.spawn(stepAutomation)
 	else
@@ -404,7 +438,7 @@ end)
 -- Main Background Loop
 task.spawn(function()
 	while alive and gui.Parent do
-		task.wait(0.3)
+		task.wait(0.4)
 		if alive and active and not busy then
 			stepAutomation()
 		end
