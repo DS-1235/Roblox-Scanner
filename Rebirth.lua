@@ -1,11 +1,10 @@
 -- ====================================================================
--- AUTO REBIRTH & STAT ALLOCATION (FINAL PRODUCTION V9)
--- Path-Verified Engine based on live UI Diagnostic
+-- AUTO REBIRTH & STAT ALLOCATION (V10 - PRECISION ENGINE)
+-- 100% Fixed: Ignores __Disable folder, Exact Coordinates, Clean UI Offset
 -- ====================================================================
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
-local GuiService = game:GetService("GuiService")
 local VIM = game:GetService("VirtualInputManager")
 local UserInputService = game:GetService("UserInputService")
 local player = Players.LocalPlayer
@@ -22,12 +21,12 @@ local AutoRebirthEnabled = true
 local isProcessing = false
 
 -- --------------------------------------------------------------------
--- Safe & Engine-Accurate Click Helper
+-- Safe & Engine-Accurate Click Helper (No Erroneous Inset Offsets)
 -- --------------------------------------------------------------------
 local function clickButton(b)
     if not b then return end
 
-    -- 1. firesignal (if supported by executor)
+    -- 1. firesignal (cleanest & fastest: fires button listeners directly)
     if typeof(firesignal) == "function" and b:IsA("GuiButton") then
         pcall(function() firesignal(b.Activated) end)
         pcall(function() firesignal(b.MouseButton1Click) end)
@@ -35,7 +34,7 @@ local function clickButton(b)
         pcall(function() firesignal(b.MouseButton1Up) end)
     end
 
-    -- 2. getconnections (if supported by executor)
+    -- 2. getconnections (direct function invocation)
     if typeof(getconnections) == "function" and b:IsA("GuiButton") then
         pcall(function()
             for _, c in ipairs(getconnections(b.Activated)) do
@@ -47,14 +46,15 @@ local function clickButton(b)
         end)
     end
 
-    -- 3. VirtualInputManager Native Simulation
+    -- 3. VirtualInputManager Native Simulation (Exact center coordinates, hover + click)
     pcall(function()
         if b.AbsoluteSize.X > 0 and b.AbsoluteSize.Y > 0 then
-            local inset = GuiService:GetGuiInset()
             local cx = b.AbsolutePosition.X + (b.AbsoluteSize.X / 2)
-            local cy = b.AbsolutePosition.Y + (b.AbsoluteSize.Y / 2) + inset.Y
+            local cy = b.AbsolutePosition.Y + (b.AbsoluteSize.Y / 2)
+            pcall(function() VIM:SendMouseMoveEvent(cx, cy, game) end)
+            task.wait(0.01)
             VIM:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
-            task.wait(0.04)
+            task.wait(0.03)
             VIM:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
         end
     end)
@@ -137,11 +137,11 @@ local function findWindowCloseButton(win)
 end
 
 -- --------------------------------------------------------------------
--- Auto-Dismiss Unwanted Popups (e.g. Daily Rewards, Wheel)
+-- Auto-Dismiss Unwanted Popups (e.g. Daily Rewards, Wheel, Inventory)
 -- --------------------------------------------------------------------
 local function dismissUnwantedPopups()
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if desc:IsA("TextLabel") and desc.Text and desc.Visible then
+        if desc:IsA("TextLabel") and desc.Text and desc.Visible and not desc:FindFirstAncestor("__Disable") then
             local t = string.upper(desc.Text)
             if string.find(t, "DAILY REWARD", 1, true) or string.find(t, "LOGIN REWARD", 1, true) or string.find(t, "SPIN THE WHEEL", 1, true) then
                 local p = desc.Parent
@@ -180,12 +180,12 @@ local function isInsideStatsWindow(obj)
 end
 
 -- --------------------------------------------------------------------
--- Locate the Stats Window Frame
+-- Locate the Truly Active Stats Window Frame (Must NOT be in __Disable)
 -- --------------------------------------------------------------------
 local function findStatsWindow()
-    -- Method 1: Check for UI_Stats in PlayerGui
+    -- Method 1: Check for UI_Stats in PlayerGui (MUST NOT be inside __Disable)
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if desc.Name == "UI_Stats" then
+        if desc.Name == "UI_Stats" and not desc:FindFirstAncestor("__Disable") then
             local isVis = desc.Visible
             if desc:IsA("ScreenGui") then isVis = desc.Enabled end
             if isVis and desc.AbsoluteSize.X > 300 then
@@ -194,9 +194,9 @@ local function findStatsWindow()
         end
     end
 
-    -- Method 2: Scan for unique text in Stats window: "SPEND YOUR POINTS" or "POINTS TO SPEND"
+    -- Method 2: Scan for unique text in Stats window (MUST NOT be in __Disable)
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if desc:IsA("TextLabel") and desc.Text and desc.Visible then
+        if desc:IsA("TextLabel") and desc.Text and desc.Visible and not desc:FindFirstAncestor("__Disable") then
             local u = string.upper(desc.Text)
             if string.find(u, "SPEND YOUR POINTS", 1, true) or string.find(u, "POINTS TO SPEND", 1, true) then
                 local curr = desc
@@ -215,7 +215,7 @@ local function findStatsWindow()
 end
 
 -- --------------------------------------------------------------------
--- 100% Guaranteed Exact HUD 'Stats' Button Locator
+-- Exact HUD 'Stats' Button Locator
 -- Verified Path: PlayerGui.Hud.UI_Hud.Root.lb.lb_hive.stats
 -- --------------------------------------------------------------------
 local function getHudStatsButton()
@@ -250,9 +250,9 @@ local function getHudStatsButton()
         end
     end
 
-    -- 3. Exact name and position match fallback
+    -- 3. Exact name and child label fallback
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if desc:IsA("GuiButton") and string.lower(desc.Name) == "stats" and desc.Visible and not isInsideStatsWindow(desc) then
+        if desc:IsA("GuiButton") and string.lower(desc.Name) == "stats" and desc.Visible and not isInsideStatsWindow(desc) and not desc:FindFirstAncestor("__Disable") then
             local label = desc:FindFirstChild("hx_label")
             if label or (desc.Parent and desc.Parent.Name == "lb_hive") then
                 return desc
@@ -268,7 +268,7 @@ end
 -- --------------------------------------------------------------------
 local function findRebirthDialog()
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if desc:IsA("TextLabel") and desc.Text and desc.Visible then
+        if desc:IsA("TextLabel") and desc.Text and desc.Visible and not desc:FindFirstAncestor("__Disable") then
             local clean = string.upper(string.gsub(desc.Text, "<[^>]+>", ""))
             if string.find(clean, "REBIRTH?") or string.find(clean, "STATS RESET") or string.find(clean, "BACK TO LEVEL 1") then
                 local frame = desc.Parent
@@ -546,14 +546,18 @@ local function runAutomationCycle(updateStatus)
         local win = findStatsWindow()
         local openedByScript = false
 
-        -- If Stats window is closed, locate the exact HUD stats button and open it
+        -- If Stats window is closed (or inside __Disable), open it via HUD stats button
         if not win or not win.Visible then
             local hudBtn = getHudStatsButton()
             if hudBtn then
                 openedByScript = true
+                updateStatus("Opening Stats Window...", Color3.fromRGB(52, 152, 219))
                 clickButton(hudBtn)
-                task.wait(0.2)
-                win = findStatsWindow()
+                for _ = 1, 8 do
+                    task.wait(0.08)
+                    win = findStatsWindow()
+                    if win and win.Visible then break end
+                end
             end
         end
 
@@ -658,6 +662,9 @@ local function runAutomationCycle(updateStatus)
             local closeBtn = findWindowCloseButton(win)
             if closeBtn then
                 clickButton(closeBtn)
+            else
+                local hudBtn = getHudStatsButton()
+                if hudBtn then clickButton(hudBtn) end
             end
         end
     end)
@@ -669,7 +676,7 @@ local function runAutomationCycle(updateStatus)
 end
 
 -- ====================================================================
--- CONTROL UI CREATION
+-- CONTROL UI CREATION (Positioned Away from Left Bar Cluster)
 -- ====================================================================
 local function createUI()
     local oldUI = CoreGui:FindFirstChild("AutoRebirthGui") or playerGui:FindFirstChild("AutoRebirthGui")
@@ -689,10 +696,10 @@ local function createUI()
         targetParent = playerGui
     end
 
-    -- Draggable Main Container
+    -- Draggable Main Container (Positioned at 240, 60 so it never covers the HUD)
     local MainFrame = Instance.new("Frame", ScreenGui)
     MainFrame.Size = UDim2.fromOffset(260, 235)
-    MainFrame.Position = UDim2.fromOffset(30, 160)
+    MainFrame.Position = UDim2.fromOffset(240, 60)
     MainFrame.BackgroundColor3 = Color3.fromRGB(18, 22, 34)
     MainFrame.BorderSizePixel = 0
 
@@ -925,4 +932,4 @@ end
 
 -- Launch
 createUI()
-print("[Auto-Rebirth] V9 (Path-Verified Engine) loaded successfully!")
+print("[Auto-Rebirth] V10 (Precision Engine) loaded successfully!")
