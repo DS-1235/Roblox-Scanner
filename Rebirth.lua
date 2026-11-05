@@ -1,8 +1,6 @@
 -- ====================================================================
--- SOLO LEVELING / ANIME SHADOW: 100% BACKGROUND AUTO-REBIRTH & STAT SYSTEM (V15)
--- ====================================================================
--- 100% Windowless: Stats window NEVER opens, never flashes, never animates.
--- Uses direct memory signal execution (getconnections) to dispatch BridgeNet2.
+-- SOLO LEVELING / ANIME SHADOW: 100% BACKGROUND AUTO-REBIRTH (V16)
+-- Option 1: Multi-Signal Dispatcher + InputBegan Simulation + Anti-Stuck Loop
 -- ====================================================================
 
 local Players = game:GetService("Players")
@@ -10,13 +8,13 @@ local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- Clean up any prior running UI instances
-for _, name in ipairs({"NS_Rebirth", "AutoRebirthGui", "SoloRebirth_V13", "SoloRebirth_V14", "SoloRebirth_V15"}) do
+-- Remove prior UI instances
+for _, name in ipairs({"NS_Rebirth", "AutoRebirthGui", "SoloRebirth_V13", "SoloRebirth_V14", "SoloRebirth_V15", "SoloRebirth_V16"}) do
     local old = playerGui:FindFirstChild(name)
     if old then pcall(function() old:Destroy() end) end
 end
 
--- Allocation Targets
+-- Target Configuration
 local TARGET_AGILITY = 200
 local TARGET_REACH   = 800
 
@@ -24,9 +22,11 @@ local TARGET_REACH   = 800
 local isRunning = true
 local isProcessing = false
 local rebirthCount = 0
+local rebirthAttempts = 0
+local lastRebirthTime = 0
 
 -- --------------------------------------------------------------------
--- 1. TEXT CLEANING & MEMORY DISPATCH HELPERS
+-- 1. STRING CLEANING & CONSOLE LOGGING
 -- --------------------------------------------------------------------
 local function cleanAlpha(str)
     if type(str) ~= "string" then return "" end
@@ -40,46 +40,102 @@ local function cleanUpper(str)
     return string.upper(string.match(noTags, "^%s*(.-)%s*$") or "")
 end
 
--- Executes a button's registered callback directly in Lua memory (Zero Screen Requirement)
-local function fireButtonBackground(btn)
-    if not btn then return false end
-    local fired = false
-
-    if typeof(getconnections) == "function" then
-        pcall(function()
-            for _, c in ipairs(getconnections(btn.Activated)) do
-                if c.Function then
-                    task.spawn(c.Function)
-                    fired = true
-                elseif c.Fire then
-                    c:Fire()
-                    fired = true
-                end
-            end
-        end)
-        pcall(function()
-            for _, c in ipairs(getconnections(btn.MouseButton1Click)) do
-                if c.Function then
-                    task.spawn(c.Function)
-                    fired = true
-                elseif c.Fire then
-                    c:Fire()
-                    fired = true
-                end
-            end
-        end)
-    end
-
-    if typeof(firesignal) == "function" and btn:IsA("GuiButton") then
-        pcall(function() firesignal(btn.Activated); fired = true end)
-        pcall(function() firesignal(btn.MouseButton1Click); fired = true end)
-    end
-
-    return fired
+local function diagLog(msg)
+    print(string.format("[SoloRebirth-V16] %s", tostring(msg)))
 end
 
 -- --------------------------------------------------------------------
--- 2. LOCATE STATS WINDOW DATA IN MEMORY (ACTIVE OR IN __DISABLE)
+-- 2. MULTI-SIGNAL MEMORY DISPATCHER (Option 1 Core)
+-- --------------------------------------------------------------------
+local function createFakeMouseInput(state)
+    return {
+        UserInputType = Enum.UserInputType.MouseButton1,
+        UserInputState = state or Enum.UserInputState.Begin,
+        Position = Vector3.new(0, 0, 0),
+        Delta = Vector3.new(0, 0, 0),
+        KeyCode = Enum.KeyCode.Unknown
+    }
+end
+
+local function fireMultiSignalBackground(btn)
+    if not btn then return false end
+
+    local targets = {}
+    local seen = {}
+    local function addTarget(obj)
+        if obj and obj:IsA("GuiObject") and not seen[obj] then
+            seen[obj] = true
+            table.insert(targets, obj)
+        end
+    end
+
+    addTarget(btn)
+    addTarget(btn:FindFirstAncestorWhichIsA("GuiButton"))
+    if btn.Parent and btn.Parent:IsA("GuiObject") then
+        addTarget(btn.Parent)
+    end
+    for _, child in ipairs(btn:GetChildren()) do
+        if child:IsA("GuiButton") then addTarget(child) end
+    end
+
+    local totalFired = 0
+
+    for _, target in ipairs(targets) do
+        if typeof(getconnections) == "function" then
+            if target:IsA("GuiButton") then
+                pcall(function()
+                    for _, c in ipairs(getconnections(target.Activated)) do
+                        if c.Function then task.spawn(c.Function); totalFired = totalFired + 1
+                        elseif c.Fire then c:Fire(); totalFired = totalFired + 1 end
+                    end
+                end)
+                pcall(function()
+                    for _, c in ipairs(getconnections(target.MouseButton1Click)) do
+                        if c.Function then task.spawn(c.Function); totalFired = totalFired + 1
+                        elseif c.Fire then c:Fire(); totalFired = totalFired + 1 end
+                    end
+                end)
+                pcall(function()
+                    for _, c in ipairs(getconnections(target.MouseButton1Down)) do
+                        if c.Function then task.spawn(c.Function); totalFired = totalFired + 1
+                        elseif c.Fire then c:Fire(); totalFired = totalFired + 1 end
+                    end
+                    for _, c in ipairs(getconnections(target.MouseButton1Up)) do
+                        if c.Function then task.spawn(c.Function); totalFired = totalFired + 1
+                        elseif c.Fire then c:Fire(); totalFired = totalFired + 1 end
+                    end
+                end)
+            end
+
+            pcall(function()
+                local fakeBegin = createFakeMouseInput(Enum.UserInputState.Begin)
+                local fakeEnd   = createFakeMouseInput(Enum.UserInputState.End)
+
+                for _, c in ipairs(getconnections(target.InputBegan)) do
+                    if c.Function then task.spawn(c.Function, fakeBegin, false); totalFired = totalFired + 1
+                    elseif c.Fire then c:Fire(fakeBegin, false); totalFired = totalFired + 1 end
+                end
+                for _, c in ipairs(getconnections(target.InputEnded)) do
+                    if c.Function then task.spawn(c.Function, fakeEnd, false); totalFired = totalFired + 1
+                    elseif c.Fire then c:Fire(fakeEnd, false); totalFired = totalFired + 1 end
+                end
+            end)
+        end
+
+        if typeof(firesignal) == "function" and target:IsA("GuiButton") then
+            pcall(function() firesignal(target.Activated); totalFired = totalFired + 1 end)
+            pcall(function() firesignal(target.MouseButton1Click); totalFired = totalFired + 1 end)
+            pcall(function() firesignal(target.MouseButton1Down); totalFired = totalFired + 1 end)
+            pcall(function() firesignal(target.MouseButton1Up); totalFired = totalFired + 1 end)
+        end
+    end
+
+    diagLog(string.format("Dispatched multi-signal to '%s' (%s) | Total callbacks invoked: %d", btn.Name, btn.ClassName, totalFired))
+    return totalFired > 0
+end
+
+-- --------------------------------------------------------------------
+-- 3. UI LOCATORS IN MEMORY
 -- --------------------------------------------------------------------
 local function getStatsRoot()
     local disableFolder = playerGui:FindFirstChild("__Disable")
@@ -95,12 +151,12 @@ local function getStatsRoot()
     end
 
     local direct = playerGui:FindFirstChild("UI_Stats", true)
-    if direct and direct.Name == "UI_Stats" and not direct:FindFirstAncestor("SoloRebirth_V15") then
+    if direct and direct.Name == "UI_Stats" and not direct:FindFirstAncestor("SoloRebirth_V16") then
         return direct
     end
 
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if not desc:FindFirstAncestor("SoloRebirth_V15") and desc:IsA("TextLabel") and desc.Text then
+        if not desc:FindFirstAncestor("SoloRebirth_V16") and desc:IsA("TextLabel") and desc.Text then
             local clean = cleanAlpha(desc.Text)
             if string.find(clean, "SPENDYOURPOINTS") then
                 local p = desc.Parent
@@ -116,12 +172,9 @@ local function getStatsRoot()
     return nil
 end
 
--- --------------------------------------------------------------------
--- 3. MAX LEVEL & CONFIRMATION DETECTORS
--- --------------------------------------------------------------------
 local function isPlayerAtMaxLevel()
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if not desc:FindFirstAncestor("SoloRebirth_V15") and desc:IsA("TextLabel") and desc.Text then
+        if not desc:FindFirstAncestor("SoloRebirth_V16") and desc:IsA("TextLabel") and desc.Text then
             local raw = desc.Text
             if string.find(raw, "%(MAX%)") or (string.find(string.upper(raw), "MAX") and string.find(string.upper(raw), "LEVEL")) then
                 return true, raw
@@ -136,7 +189,7 @@ local function findRebirthButton(statsRoot)
     for _, root in ipairs(roots) do
         if root then
             for _, desc in ipairs(root:GetDescendants()) do
-                if not desc:FindFirstAncestor("SoloRebirth_V15") and not desc:FindFirstAncestor("Hud") then
+                if not desc:FindFirstAncestor("SoloRebirth_V16") and not desc:FindFirstAncestor("Hud") then
                     local raw = (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text or ""
                     if cleanAlpha(raw) == "REBIRTH" then
                         local btn = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
@@ -154,7 +207,7 @@ local function findRebirthConfirmYesButton(statsRoot)
     for _, root in ipairs(roots) do
         if root then
             for _, desc in ipairs(root:GetDescendants()) do
-                if not desc:FindFirstAncestor("SoloRebirth_V15") and not desc:FindFirstAncestor("Hud") then
+                if not desc:FindFirstAncestor("SoloRebirth_V16") and not desc:FindFirstAncestor("Hud") then
                     local rawText = (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text or ""
                     local clean = cleanAlpha(rawText)
 
@@ -192,7 +245,7 @@ local function findRebirthConfirmYesButton(statsRoot)
 end
 
 -- --------------------------------------------------------------------
--- 4. POINT READING & STAT ALLOCATION HELPERS
+-- 4. POINT READING & STAT ALLOCATION
 -- --------------------------------------------------------------------
 local function getAvailablePoints(statsRoot)
     if not statsRoot then return 0 end
@@ -296,17 +349,27 @@ local function getStatRow(statsRoot, statName)
 end
 
 -- --------------------------------------------------------------------
--- 5. REBIRTH WORKFLOW (100% SILENT & BACKGROUND)
+-- 5. REBIRTH WORKFLOW (MULTI-SIGNAL + ANTI-STUCK GUARD)
 -- --------------------------------------------------------------------
 local function executeBackgroundRebirth(statsRoot, updateStatus)
+    local now = os.clock()
+    if now - lastRebirthTime < 3.0 then
+        return false
+    end
+
     local yesBtn = findRebirthConfirmYesButton(statsRoot)
 
     if not yesBtn then
         local rebirthBtn = findRebirthButton(statsRoot)
-        if not rebirthBtn then return false end
+        if not rebirthBtn then
+            diagLog("Rebirth button not found in data tree.")
+            return false
+        end
 
-        updateStatus("Triggering REBIRTH in Background...", Color3.fromRGB(241, 196, 15))
-        fireButtonBackground(rebirthBtn)
+        diagLog("Found REBIRTH button: " .. rebirthBtn:GetFullName())
+        updateStatus("Firing REBIRTH (Multi-Signal)...", Color3.fromRGB(241, 196, 15))
+        fireMultiSignalBackground(rebirthBtn)
+        lastRebirthTime = now
 
         for _ = 1, 10 do
             task.wait(0.1)
@@ -316,22 +379,37 @@ local function executeBackgroundRebirth(statsRoot, updateStatus)
     end
 
     if yesBtn then
-        updateStatus("Confirming YES in Background...", Color3.fromRGB(46, 204, 113))
+        diagLog("Found YES button: " .. yesBtn:GetFullName() .. " (" .. yesBtn.ClassName .. ")")
+        updateStatus("Confirming YES (Multi-Signal)...", Color3.fromRGB(46, 204, 113))
         task.wait(0.1)
-        fireButtonBackground(yesBtn)
 
-        for _ = 1, 15 do
+        fireMultiSignalBackground(yesBtn)
+        rebirthAttempts = rebirthAttempts + 1
+        lastRebirthTime = os.clock()
+
+        for _ = 1, 12 do
             task.wait(0.1)
             local atMax = isPlayerAtMaxLevel()
             local stillYes = findRebirthConfirmYesButton(statsRoot)
             if not atMax or not stillYes then
                 rebirthCount = rebirthCount + 1
-                updateStatus(string.format("Rebirth #%d Successful! (Level Reset)", rebirthCount), Color3.fromRGB(46, 204, 113))
-                task.wait(0.4)
+                rebirthAttempts = 0
+                updateStatus(string.format("Rebirth #%d Confirmed!", rebirthCount), Color3.fromRGB(46, 204, 113))
+                diagLog(string.format("Rebirth #%d verified successfully!", rebirthCount))
+                task.wait(0.5)
                 return true
             end
         end
-        return true
+
+        if rebirthAttempts >= 3 then
+            updateStatus(string.format("Rebirth pending server response (Attempt %d/3)...", rebirthAttempts), Color3.fromRGB(230, 126, 34))
+            diagLog("3 Rebirth confirmation attempts sent. Pausing for 5s to allow server to sync.")
+            lastRebirthTime = os.clock() + 5.0
+            rebirthAttempts = 0
+            return false
+        end
+
+        return false
     end
 
     return false
@@ -341,7 +419,7 @@ end
 -- 6. CONTROL UI
 -- --------------------------------------------------------------------
 local gui = Instance.new("ScreenGui")
-gui.Name = "SoloRebirth_V15"
+gui.Name = "SoloRebirth_V16"
 gui.ResetOnSpawn = false
 gui.DisplayOrder = 100
 gui.Parent = playerGui
@@ -363,7 +441,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -20, 0, 24)
 title.Position = UDim2.fromOffset(10, 8)
 title.BackgroundTransparency = 1
-title.Text = "⚡ 100% Background Auto-Rebirth (V15)"
+title.Text = "⚡ Background Auto-Rebirth (V16 - Option 1)"
 title.TextColor3 = Color3.fromRGB(255, 215, 0)
 title.TextSize = 13
 title.Font = Enum.Font.GothamBold
@@ -374,7 +452,7 @@ local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(1, -20, 0, 34)
 statusLabel.Position = UDim2.fromOffset(10, 32)
 statusLabel.BackgroundTransparency = 1
-statusLabel.Text = "Status: Initializing Background Monitor..."
+statusLabel.Text = "Status: Initializing..."
 statusLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
 statusLabel.TextSize = 11
 statusLabel.TextWrapped = true
@@ -435,7 +513,7 @@ local function updateStatsReadout(pts, agi, rch, exp)
 end
 
 -- --------------------------------------------------------------------
--- 7. BACKGROUND AUTOMATION CYCLE (ZERO UI OPENING)
+-- 7. MAIN AUTOMATION CYCLE
 -- --------------------------------------------------------------------
 local function runBackgroundCycle()
     if isProcessing then return end
@@ -450,20 +528,16 @@ local function runBackgroundCycle()
 
         local atMax, hudText = isPlayerAtMaxLevel()
 
-        -- 1. Execute Background Rebirth if at Max Level
         if atMax or findRebirthConfirmYesButton(statsRoot) then
-            local rebirthed = executeBackgroundRebirth(statsRoot, updateStatus)
-            if rebirthed then task.wait(0.4) end
+            executeBackgroundRebirth(statsRoot, updateStatus)
         end
 
-        -- 2. Read Points & Stat Levels in Memory
         local points = getAvailablePoints(statsRoot)
         local agi = getStatRow(statsRoot, "Shadow Agility")
         local rch = getStatRow(statsRoot, "Shadow Reach")
         local exp = getStatRow(statsRoot, "Player Experience")
         updateStatsReadout(points, agi, rch, exp)
 
-        -- 3. Allocate Points in Background if available
         if points > 0 then
             local function spendOnStatBackground(statTitle, targetLevel)
                 local row = getStatRow(statsRoot, statTitle)
@@ -473,7 +547,7 @@ local function runBackgroundCycle()
                 local toSpend = math.min(points, needed)
                 if toSpend <= 0 then return end
 
-                updateStatus(string.format("Background Spending %d on %s...", toSpend, statTitle), Color3.fromRGB(46, 204, 113))
+                updateStatus(string.format("Spending %d on %s...", toSpend, statTitle), Color3.fromRGB(46, 204, 113))
                 setCustomAmountBackground(statsRoot, toSpend)
 
                 local attempts = 0
@@ -481,7 +555,7 @@ local function runBackgroundCycle()
                     local freshRow = getStatRow(statsRoot, statTitle)
                     if not freshRow or freshRow.isMax or not freshRow.button then break end
 
-                    fireButtonBackground(freshRow.button)
+                    fireMultiSignalBackground(freshRow.button)
                     task.wait(0.06)
 
                     local newPoints = getAvailablePoints(statsRoot)
@@ -494,19 +568,14 @@ local function runBackgroundCycle()
                 updateStatsReadout(points, getStatRow(statsRoot, "Shadow Agility"), getStatRow(statsRoot, "Shadow Reach"), getStatRow(statsRoot, "Player Experience"))
             end
 
-            -- Priority 1: Shadow Agility -> 200
             spendOnStatBackground("Shadow Agility", TARGET_AGILITY)
-
-            -- Priority 2: Shadow Reach -> 800
             spendOnStatBackground("Shadow Reach", TARGET_REACH)
 
-            -- Priority 3: Player Experience -> MAX
             local freshExp = getStatRow(statsRoot, "Player Experience")
             if freshExp and not freshExp.isMax then
                 spendOnStatBackground("Player Experience", freshExp.max)
             end
 
-            -- Priority 4: Overflow into Shadow Reach
             freshExp = getStatRow(statsRoot, "Player Experience")
             if freshExp and freshExp.isMax and points > 0 then
                 local freshRch = getStatRow(statsRoot, "Shadow Reach")
@@ -518,7 +587,7 @@ local function runBackgroundCycle()
                         local r = getStatRow(statsRoot, "Shadow Reach")
                         if not r or r.isMax or not r.button then break end
 
-                        fireButtonBackground(r.button)
+                        fireMultiSignalBackground(r.button)
                         task.wait(0.06)
 
                         local newPoints = getAvailablePoints(statsRoot)
@@ -529,7 +598,9 @@ local function runBackgroundCycle()
                 end
             end
         else
-            updateStatus("Active (Background Monitoring)", Color3.fromRGB(230, 230, 230))
+            if not atMax and not findRebirthConfirmYesButton(statsRoot) then
+                updateStatus("Active (Background Monitoring)", Color3.fromRGB(230, 230, 230))
+            end
         end
     end)
 
@@ -540,7 +611,7 @@ local function runBackgroundCycle()
 end
 
 -- --------------------------------------------------------------------
--- 8. BUTTON CONTROLS & MONITOR THREAD
+-- 8. CONTROLS & MONITOR THREAD
 -- --------------------------------------------------------------------
 toggleBtn.MouseButton1Click:Connect(function()
     isRunning = not isRunning
@@ -566,14 +637,13 @@ end)
 
 updateStatus("Active (Background Monitoring)", Color3.fromRGB(230, 230, 230))
 
--- Calm 1.5s background interval: No UI opening, no CPU spikes, zero tween glitching
 task.spawn(function()
     while gui and gui.Parent do
         if isRunning then
             runBackgroundCycle()
         end
-        task.wait(1.5)
+        task.wait(2.0)
     end
 end)
 
-print("[SoloRebirth V15] 100% Background Auto-Rebirth & Stat Allocation Initialized!")
+print("[SoloRebirth V16] Option 1 (Multi-Signal Background) Loaded Successfully!")
