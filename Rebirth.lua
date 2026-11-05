@@ -1,22 +1,26 @@
 -- ====================================================================
--- SOLO LEVELING / ANIME SHADOW: 100% BACKGROUND AUTO-REBIRTH (V21 - PRODUCTION)
+-- SOLO LEVELING / ANIME SHADOW: 100% BACKGROUND AUTO-REBIRTH (V22 - PRODUCTION)
 -- ====================================================================
--- FIXES APPLIED IN V21:
--- 1. STRICT STAT ALLOCATION ORDER & AMOUNTS (FIXED OVER-ALLOCATION):
+-- FIXES APPLIED IN V22:
+-- 1. ONE-TIME CONTROLLER WAKEUP:
+--    - Eliminates the "+2 points only" bug after rebirth.
+--    - Performs a rapid (0.15s) one-time HUD stats toggle on spawn/rebirth.
+--    - Wakes up the game's dormant UI_Stats LocalScript controller.
+--    - All subsequent background allocations instantly spend in bulk (+200, +800, MAX).
+-- 2. CUSTOM AMOUNT MODE ACTIVATION:
+--    - Clicks the 'Amount' button when setting custom numbers so the game exits x1 mode.
+-- 3. ELIMINATED INFINITE RETRY LOOPS (FAIL-SAFE EXIT):
+--    - Max 2-3 attempts per stat. If an overflow stat doesn't confirm, immediately
+--      exits cleanly to 'Active (Background Monitoring)' without console spam.
+-- 4. STRICT ALLOCATION SEQUENCE & AMOUNTS:
 --    - Shadow Agility  -> Strictly capped at 200.
 --    - Shadow Reach    -> Strictly capped at 800 (atomic single-click, no double-tap).
 --    - Player Exp      -> Receives ALL remaining points until MAX (e.g. 3,375).
 --    - Overflow        -> ONLY if Player Exp is 100% MAX, excess feeds into Shadow Reach.
--- 2. ELIMINATED DOUBLE-TAP LATENCY BUG:
---    - Replaced rapid 0.06s double-clicking with atomic click + server sync polling.
---    - Waits up to 1.5s for server acknowledgement before re-evaluating.
--- 3. AIRTIGHT ROW ISOLATION:
---    - Single-row validator ensures the script never ascends to parent list container.
---    - Exactly 1 upgrade button and 1 Lv label per stat row.
--- 4. ELIMINATED 79 GHOST POINTS BUG:
+-- 5. ELIMINATED 79 GHOST POINTS BUG:
 --    - sa_reset Robux price tag is strictly excluded.
---    - 0 unspent points is recognized as valid idle state.
--- 5. 100% BACKGROUND EXECUTION: Zero window opening, zero HUD clicks.
+--    - 0 unspent points recognized as valid idle state.
+-- 6. 100% BACKGROUND EXECUTION: Window stays closed throughout farming and leveling.
 -- ====================================================================
 
 local Players = game:GetService("Players")
@@ -25,7 +29,7 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- Remove prior UI instances
-for _, name in ipairs({"NS_Rebirth", "AutoRebirthGui", "SoloRebirth_V13", "SoloRebirth_V14", "SoloRebirth_V15", "SoloRebirth_V16", "SoloRebirth_V17", "SoloRebirth_V18", "SoloRebirth_V19", "SoloRebirth_V20", "SoloRebirth_V21"}) do
+for _, name in ipairs({"NS_Rebirth", "AutoRebirthGui", "SoloRebirth_V13", "SoloRebirth_V14", "SoloRebirth_V15", "SoloRebirth_V16", "SoloRebirth_V17", "SoloRebirth_V18", "SoloRebirth_V19", "SoloRebirth_V20", "SoloRebirth_V21", "SoloRebirth_V22"}) do
     local old = playerGui:FindFirstChild(name)
     if old then pcall(function() old:Destroy() end) end
 end
@@ -39,6 +43,7 @@ local isRunning = true
 local isProcessing = false
 local rebirthCount = 0
 local lastRebirthTime = 0
+local hasInitializedController = false
 
 -- --------------------------------------------------------------------
 -- 1. STRING CLEANING & SAFE TEXT RESOLUTION
@@ -69,7 +74,7 @@ local function getButtonText(btn)
 end
 
 local function diagLog(msg)
-    print(string.format("[SoloRebirth-V21] %s", tostring(msg)))
+    print(string.format("[SoloRebirth-V22] %s", tostring(msg)))
 end
 
 -- --------------------------------------------------------------------
@@ -178,12 +183,12 @@ local function getStatsRoot()
     end
 
     local direct = playerGui:FindFirstChild("UI_Stats", true)
-    if direct and direct.Name == "UI_Stats" and not direct:FindFirstAncestor("SoloRebirth_V21") then
+    if direct and direct.Name == "UI_Stats" and not direct:FindFirstAncestor("SoloRebirth_V22") then
         return direct
     end
 
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if not desc:FindFirstAncestor("SoloRebirth_V21") and desc:IsA("TextLabel") and desc.Text then
+        if not desc:FindFirstAncestor("SoloRebirth_V22") and desc:IsA("TextLabel") and desc.Text then
             local clean = cleanAlpha(desc.Text)
             if string.find(clean, "SPENDYOURPOINTS") then
                 local p = desc.Parent
@@ -201,7 +206,7 @@ end
 
 local function isPlayerAtMaxLevel()
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if not desc:FindFirstAncestor("SoloRebirth_V21") and not desc:FindFirstAncestor("UI_Stats") and desc:IsA("TextLabel") and desc.Text then
+        if not desc:FindFirstAncestor("SoloRebirth_V22") and not desc:FindFirstAncestor("UI_Stats") and desc:IsA("TextLabel") and desc.Text then
             local raw = desc.Text
             if string.find(raw, "%(MAX%)") then
                 return true, raw
@@ -209,6 +214,71 @@ local function isPlayerAtMaxLevel()
         end
     end
     return false, nil
+end
+
+local function findHudStatsButton()
+    local hud = playerGui:FindFirstChild("Hud")
+    if hud then
+        local uiHud = hud:FindFirstChild("UI_Hud", true)
+        if uiHud then
+            local root = uiHud:FindFirstChild("Root", true)
+            if root then
+                local lb = root:FindFirstChild("lb", true)
+                if lb then
+                    local statsBtn = lb:FindFirstChild("stats", true)
+                    if statsBtn then
+                        local btn = statsBtn:IsA("GuiButton") and statsBtn or statsBtn:FindFirstChildWhichIsA("GuiButton", true)
+                        if btn then return btn end
+                    end
+                end
+            end
+        end
+    end
+
+    for _, desc in ipairs(playerGui:GetDescendants()) do
+        if desc:FindFirstAncestor("Hud") or desc:FindFirstAncestor("UI_Hud") then
+            if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and cleanAlpha(desc.Text) == "STATS" then
+                local btn = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
+                if btn then return btn end
+            end
+        end
+    end
+    return nil
+end
+
+local function findStatsCloseButton(statsRoot)
+    if not statsRoot then return nil end
+    for _, desc in ipairs(statsRoot:GetDescendants()) do
+        if desc:IsA("GuiButton") then
+            local name = string.lower(desc.Name)
+            local txt = getButtonText(desc)
+            if name == "close" or name == "btn_close" or txt == "X" or string.find(name, "close") then
+                return desc
+            end
+        end
+    end
+    return nil
+end
+
+-- Rapid 0.15s one-time wakeup to initialize the game's dormant UI_Stats LocalScript
+local function triggerOneTimeStatsWakeup()
+    local hudBtn = findHudStatsButton()
+    if not hudBtn then return end
+
+    diagLog("Triggering one-time controller wakeup for UI_Stats...")
+    fireMultiSignalBackground(hudBtn)
+    task.wait(0.15)
+
+    local statsRoot = getStatsRoot()
+    local closeBtn = findStatsCloseButton(statsRoot)
+    if closeBtn then
+        fireMultiSignalBackground(closeBtn)
+        task.wait(0.1)
+    else
+        fireMultiSignalBackground(hudBtn)
+        task.wait(0.1)
+    end
+    diagLog("UI_Stats controller initialized and ready in memory!")
 end
 
 local function findRebirthButton(statsRoot)
@@ -320,7 +390,6 @@ local function getAvailablePoints(statsRoot)
     if saSide then
         -- 1. Check Diamond Badge: Find pure number whose parent has "POINTS"
         for _, desc in ipairs(saSide:GetDescendants()) do
-            -- STRICT FILTER: Ignore Reset Stats button entirely!
             if desc:FindFirstAncestor("sa_reset") or string.find(string.lower(desc.Name), "reset") or (desc.Parent and string.find(string.lower(desc.Parent.Name), "reset")) then
                 continue
             end
@@ -331,7 +400,6 @@ local function getAvailablePoints(statsRoot)
                     local clean = string.gsub(raw, "[,%s]", "")
                     local num = tonumber(clean)
                     if num ~= nil and num < 10000000 then
-                        -- Check if parent or sibling has "POINTS"
                         local p = desc.Parent
                         local isPointsBadge = false
                         if p then
@@ -370,6 +438,20 @@ local function getAvailablePoints(statsRoot)
     return 0
 end
 
+local function selectAmountMode(statsRoot)
+    if not statsRoot then return end
+    for _, desc in ipairs(statsRoot:GetDescendants()) do
+        if desc:IsA("GuiButton") then
+            local txt = getButtonText(desc)
+            local name = string.lower(desc.Name)
+            if txt == "AMOUNT" or string.find(name, "amount") then
+                fireMultiSignalBackground(desc)
+                return
+            end
+        end
+    end
+end
+
 local function setCustomAmountBackground(statsRoot, amount)
     if not statsRoot then return end
     local targetVal = math.max(1, math.floor(amount))
@@ -377,30 +459,28 @@ local function setCustomAmountBackground(statsRoot, amount)
 
     for _, desc in ipairs(statsRoot:GetDescendants()) do
         if desc:IsA("TextBox") then
-            if desc.Text ~= str then
-                desc.Text = str
-                pcall(function()
-                    if typeof(firesignal) == "function" then
-                        firesignal(desc.FocusLost, true)
-                        firesignal(desc:GetPropertyChangedSignal("Text"))
+            desc.Text = str
+            pcall(function()
+                if typeof(firesignal) == "function" then
+                    firesignal(desc.FocusLost, true)
+                    firesignal(desc:GetPropertyChangedSignal("Text"))
+                end
+                if typeof(getconnections) == "function" then
+                    for _, c in ipairs(getconnections(desc.FocusLost)) do
+                        if c.Function then task.spawn(c.Function, true) elseif c.Fire then c:Fire(true) end
                     end
-                    if typeof(getconnections) == "function" then
-                        for _, c in ipairs(getconnections(desc.FocusLost)) do
-                            if c.Function then task.spawn(c.Function, true) elseif c.Fire then c:Fire(true) end
-                        end
-                        for _, c in ipairs(getconnections(desc:GetPropertyChangedSignal("Text"))) do
-                            if c.Function then task.spawn(c.Function) elseif c.Fire then c:Fire() end
-                        end
+                    for _, c in ipairs(getconnections(desc:GetPropertyChangedSignal("Text"))) do
+                        if c.Function then task.spawn(c.Function) elseif c.Fire then c:Fire() end
                     end
-                end)
-                task.wait(0.08)
-            end
+                end
+            end)
+            task.wait(0.06)
+            selectAmountMode(statsRoot)
             return
         end
     end
 end
 
--- Strictly validates that a frame contains EXACTLY one stat row (prevents ascending to list container)
 local function isSingleStatRow(frame)
     if not frame or not frame:IsA("GuiObject") then return false end
     local titleCount = 0
@@ -443,7 +523,6 @@ local function getStatRow(statsRoot, statName)
             local curr = desc.Parent
             local matchedRow = nil
 
-            -- Ascend strictly until we find the isolated single row frame
             for _ = 1, 5 do
                 if not curr or curr == statsRoot then break end
                 if isSingleStatRow(curr) then
@@ -453,7 +532,6 @@ local function getStatRow(statsRoot, statName)
                 curr = curr.Parent
             end
 
-            -- Fallback if exact row validator was strict
             if not matchedRow then
                 curr = desc.Parent
                 for _ = 1, 4 do
@@ -567,7 +645,7 @@ end
 -- 6. CONTROL UI
 -- --------------------------------------------------------------------
 local gui = Instance.new("ScreenGui")
-gui.Name = "SoloRebirth_V21"
+gui.Name = "SoloRebirth_V22"
 gui.ResetOnSpawn = false
 gui.DisplayOrder = 100
 gui.Parent = playerGui
@@ -589,7 +667,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -20, 0, 24)
 title.Position = UDim2.fromOffset(10, 8)
 title.BackgroundTransparency = 1
-title.Text = "⚡ Background Auto-Rebirth (V21 - Production)"
+title.Text = "⚡ Background Auto-Rebirth (V22 - Production)"
 title.TextColor3 = Color3.fromRGB(255, 215, 0)
 title.TextSize = 13
 title.Font = Enum.Font.GothamBold
@@ -661,7 +739,7 @@ local function updateStatsReadout(pts, agi, rch, exp)
 end
 
 -- --------------------------------------------------------------------
--- 7. ATOMIC STAT ALLOCATION (NO DOUBLE-TAPPING, STRICT LIMITS)
+-- 7. ATOMIC STAT ALLOCATION (MAX 2 ATTEMPTS, NO INFINITE RETRY)
 -- --------------------------------------------------------------------
 local function spendOnStatBackground(statsRoot, statTitle, targetLevel, getAvailablePointsFunc)
     local points = getAvailablePointsFunc(statsRoot)
@@ -693,10 +771,11 @@ local function spendOnStatBackground(statsRoot, statTitle, targetLevel, getAvail
     updateStatus(string.format("Spending %d on %s...", toSpend, statTitle), Color3.fromRGB(46, 204, 113))
     
     setCustomAmountBackground(statsRoot, toSpend)
-    task.wait(0.1) -- Ensure GUI registers the typed amount
+    task.wait(0.08)
 
     local attempts = 0
-    while points > 0 and attempts < 10 do
+    -- Strict limit: max 2 attempts so it never loops indefinitely
+    while points > 0 and attempts < 2 do
         local freshRow = getStatRow(statsRoot, statTitle)
         if not freshRow or freshRow.isMax or not freshRow.button then break end
         if freshRow.current >= targetLevel then
@@ -707,10 +786,10 @@ local function spendOnStatBackground(statsRoot, statTitle, targetLevel, getAvail
         local currentPointsBefore = getAvailablePointsFunc(statsRoot)
         local currentLevelBefore = freshRow.current
 
-        -- FIRE EXACTLY ONCE (NO DOUBLE-TAP)
+        -- FIRE EXACTLY ONCE
         fireMultiSignalBackground(freshRow.button)
 
-        -- POLL FOR SERVER CONFIRMATION (up to 1.5 seconds)
+        -- POLL FOR SERVER CONFIRMATION (up to 1.5s)
         local confirmed = false
         local waitStart = os.clock()
         while (os.clock() - waitStart) < 1.5 do
@@ -729,13 +808,12 @@ local function spendOnStatBackground(statsRoot, statTitle, targetLevel, getAvail
         end
 
         if not confirmed then
-            diagLog(string.format("Server did not confirm spend on %s after 1.5s. Syncing points.", statTitle))
+            diagLog(string.format("Server response timed out for %s (attempt %d/2). Syncing points.", statTitle, attempts + 1))
             points = getAvailablePointsFunc(statsRoot)
         end
 
         attempts = attempts + 1
         
-        -- Strict target check
         local checkRow = getStatRow(statsRoot, statTitle)
         if checkRow and checkRow.current >= targetLevel then
             break
@@ -760,25 +838,39 @@ local function runBackgroundCycle()
             return
         end
 
+        -- 1. Initial Wakeup (runs once on startup if points exist to initialize game controller)
+        local points = getAvailablePoints(statsRoot)
+        if points > 0 and not hasInitializedController then
+            hasInitializedController = true
+            triggerOneTimeStatsWakeup()
+            task.wait(0.2)
+            statsRoot = getStatsRoot()
+            points = getAvailablePoints(statsRoot)
+        end
+
         local atMax, hudText = isPlayerAtMaxLevel()
 
-        -- 1. ONLY EXECUTE REBIRTH IF ACTUALLY AT MAX LEVEL!
+        -- 2. ONLY EXECUTE REBIRTH IF ACTUALLY AT MAX LEVEL!
         if atMax then
             local rebirthed = executeBackgroundRebirth(statsRoot, updateStatus)
             if rebirthed then
-                task.wait(0.5)
+                task.wait(0.4)
+                -- Trigger one-time controller wakeup on the fresh post-rebirth UI
+                triggerOneTimeStatsWakeup()
+                task.wait(0.2)
+                statsRoot = getStatsRoot()
                 atMax = false
             end
         end
 
-        -- 2. Read Points & Stat Levels in Memory
-        local points = getAvailablePoints(statsRoot)
+        -- 3. Read Points & Stat Levels in Memory
+        points = getAvailablePoints(statsRoot)
         local agi = getStatRow(statsRoot, "Shadow Agility")
         local rch = getStatRow(statsRoot, "Shadow Reach")
         local exp = getStatRow(statsRoot, "Player Experience")
         updateStatsReadout(points, agi, rch, exp)
 
-        -- 3. Allocate Points in Background
+        -- 4. Allocate Points in Background
         if points > 0 then
             diagLog(string.format("Available: %d points | Agi: %d/200, Reach: %d/800, Exp: %d/%d",
                 points, agi and agi.current or 0, rch and rch.current or 0, exp and exp.current or 0, exp and exp.max or 3375))
@@ -860,4 +952,4 @@ task.spawn(function()
     end
 end)
 
-print("[SoloRebirth V21] 100% Background Auto-Rebirth & Stat Allocation Initialized!")
+print("[SoloRebirth V22] 100% Background Auto-Rebirth & Stat Allocation Initialized!")
