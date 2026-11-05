@@ -1,4 +1,7 @@
 local Players = game:GetService("Players")
+local VIM = game:GetService("VirtualInputManager")
+local GuiService = game:GetService("GuiService")
+
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
@@ -31,7 +34,7 @@ infoLabel.TextColor3 = Color3.new(1, 1, 1)
 infoLabel.TextSize = 12
 infoLabel.TextWrapped = true
 infoLabel.TextYAlignment = Enum.TextYAlignment.Top
-infoLabel.Text = "Windowless Auto-Rebirth (Fixed YES): Ready\nClick START"
+infoLabel.Text = "Windowless Auto-Rebirth (Fixed Popup): Ready\nClick START"
 infoLabel.Parent = frame
 
 local function createButton(text, xOffset, width)
@@ -73,11 +76,10 @@ local function cleanUpper(str)
 	return string.upper(string.match(str, "^%s*(.-)%s*$") or "")
 end
 
--- Fires both getconnections and firesignal so NUI button callbacks always execute
+-- Fires signals in the background
 local function fireSignalBackground(signal, ...)
 	if not signal then return false end
 	local fired = false
-
 	if typeof(getconnections) == "function" then
 		local ok, conns = pcall(getconnections, signal)
 		if ok and type(conns) == "table" and #conns > 0 then
@@ -92,31 +94,42 @@ local function fireSignalBackground(signal, ...)
 			end
 		end
 	end
-
 	if not fired and typeof(firesignal) == "function" then
 		local ok = pcall(firesignal, signal, ...)
 		if ok then fired = true end
 	end
-
 	return fired
 end
 
--- Collects all clickable GuiButtons related to a label (self, ancestor, or sibling NUI_Hit/btn)
+-- Safely clicks a button (supports both background signal firing and VIM mouse tap)
+local function clickButtonSafe(btn)
+	if not btn then return end
+	fireSignalBackground(btn.Activated)
+	fireSignalBackground(btn.MouseButton1Click)
+
+	pcall(function()
+		local inset = GuiService:GetGuiInset()
+		local cx = btn.AbsolutePosition.X + (btn.AbsoluteSize.X / 2)
+		local cy = btn.AbsolutePosition.Y + (btn.AbsoluteSize.Y / 2) + inset.Y
+		VIM:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+		task.wait(0.04)
+		VIM:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
+	end)
+end
+
+-- Collects all candidate GuiButtons from a label
 local function getAllButtonsFromLabel(lbl)
 	local buttons = {}
 	local seen = {}
-
 	local function addBtn(b)
 		if b and b:IsA("GuiButton") and not seen[b] then
 			seen[b] = true
 			table.insert(buttons, b)
 		end
 	end
-
 	if not lbl then return buttons end
 	addBtn(lbl)
 	addBtn(lbl:FindFirstAncestorWhichIsA("GuiButton"))
-
 	local p1 = lbl.Parent
 	if p1 then
 		addBtn(p1)
@@ -124,30 +137,26 @@ local function getAllButtonsFromLabel(lbl)
 			addBtn(child)
 		end
 	end
-
 	return buttons
 end
 
--- Triggers all GuiButton signals on a button or label container in the background
 local function triggerElementBackground(lblOrBtn)
 	if not lblOrBtn then return false end
-	local targets = lblOrBtn:IsA("GuiButton") and { lblOrBtn } or getAllButtonsFromLabel(lblOrBtn)
-	local anyFired = false
-
-	for _, btn in ipairs(targets) do
-		local f1 = fireSignalBackground(btn.Activated)
-		local f2 = fireSignalBackground(btn.MouseButton1Click)
-		fireSignalBackground(btn.MouseButton1Down, 0, 0)
-		task.wait(0.02)
-		fireSignalBackground(btn.MouseButton1Up, 0, 0)
-		if f1 or f2 then
-			anyFired = true
-		end
+	if lblOrBtn:IsA("GuiButton") then
+		clickButtonSafe(lblOrBtn)
+		return true
 	end
-	return anyFired
+	local targets = getAllButtonsFromLabel(lblOrBtn)
+	if #targets > 0 then
+		for _, b in ipairs(targets) do
+			clickButtonSafe(b)
+		end
+		return true
+	end
+	return false
 end
 
--- Checks if an element is locally visible inside its window (even if the window is inside __Disable)
+-- Checks if an element is locally visible
 local function isLocallyVisible(obj, stopAt)
 	if not obj then return false end
 	local cur = obj
@@ -163,12 +172,11 @@ local function isLocallyVisible(obj, stopAt)
 	return true
 end
 
--- Finds all TextLabels/TextButtons matching targetText, prioritizing active Menus and locally visible ones
+-- Finds labels matching targetText
 local function findAllLabels(targetText, searchRoot)
 	local root = searchRoot or playerGui
 	local target = cleanUpper(targetText)
 	local matches = {}
-
 	for _, desc in ipairs(root:GetDescendants()) do
 		if not desc:IsDescendantOf(gui) and (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
 			if cleanUpper(desc.Text) == target then
@@ -176,21 +184,12 @@ local function findAllLabels(targetText, searchRoot)
 			end
 		end
 	end
-
 	table.sort(matches, function(a, b)
-		local aInMenus = a:FindFirstAncestor("Menus") ~= nil
-		local bInMenus = b:FindFirstAncestor("Menus") ~= nil
-		if aInMenus ~= bInMenus then
-			return aInMenus
-		end
 		local aVis = isLocallyVisible(a)
 		local bVis = isLocallyVisible(b)
-		if aVis ~= bVis then
-			return aVis
-		end
+		if aVis ~= bVis then return aVis end
 		return false
 	end)
-
 	return matches
 end
 
@@ -199,11 +198,10 @@ local function findBestLabel(targetText, searchRoot)
 	return list[1]
 end
 
--- Locates the Stats UI root container
+-- Locates Stats UI root
 local function getStatsRoot()
 	local spendHeader = findBestLabel("SPEND YOUR POINTS")
 	if not spendHeader then return nil end
-
 	local cur = spendHeader
 	while cur and cur.Parent and cur.Parent ~= playerGui do
 		if cur:IsA("ScreenGui") or cur.Parent.Name == "Menus" or cur.Parent.Name == "__Disable" then
@@ -214,28 +212,25 @@ local function getStatsRoot()
 	return cur
 end
 
--- Locates the exact "REBIRTH?" confirmation dialog and its "YES" button
+-- Locates the exact "REBIRTH?" dialog and its "YES" button
 local function findRebirthConfirmYesButton()
 	local confirmHeaders = findAllLabels("REBIRTH?")
 	for _, header in ipairs(confirmHeaders) do
-		if isLocallyVisible(header) then
-			-- Walk up parents until we find the dialog box that holds both "YES" and "NO"
-			local dialogBox = header.Parent
-			for _ = 1, 6 do
-				if not dialogBox or dialogBox == playerGui then break end
-				local yesLbl = findBestLabel("YES", dialogBox)
-				local noLbl = findBestLabel("NO", dialogBox)
-				if yesLbl and noLbl and isLocallyVisible(yesLbl, dialogBox) then
-					return yesLbl
-				end
-				dialogBox = dialogBox.Parent
+		local dialogBox = header.Parent
+		for _ = 1, 6 do
+			if not dialogBox or dialogBox == playerGui then break end
+			local yesLbl = findBestLabel("YES", dialogBox)
+			local noLbl = findBestLabel("NO", dialogBox)
+			if yesLbl and noLbl then
+				return yesLbl
 			end
+			dialogBox = dialogBox.Parent
 		end
 	end
 	return nil
 end
 
--- Checks the bottom HUD level bar for "(MAX)" (e.g., "Level 1900 (MAX) · Rank GSR+")
+-- Checks bottom HUD level bar for "(MAX)"
 local function getHudLevelStatus()
 	for _, desc in ipairs(playerGui:GetDescendants()) do
 		if not desc:IsDescendantOf(gui) and desc:IsA("TextLabel") then
@@ -251,11 +246,10 @@ local function getHudLevelStatus()
 	return false, nil
 end
 
--- Reads unspent stat points from the "POINTS" diamond
+-- Reads unspent points
 local function getAvailablePoints(statsRoot)
 	local pointsHeader = findBestLabel("POINTS", statsRoot)
 	if not pointsHeader then return 0 end
-
 	local container = pointsHeader.Parent
 	for _ = 1, 2 do
 		if container then
@@ -263,9 +257,7 @@ local function getAvailablePoints(statsRoot)
 				if desc ~= pointsHeader and desc:IsA("TextLabel") then
 					local raw = string.gsub(desc.Text or "", "[,%s]", "")
 					local num = tonumber(raw)
-					if num ~= nil then
-						return num
-					end
+					if num ~= nil then return num end
 				end
 			end
 			container = container.Parent
@@ -274,7 +266,7 @@ local function getAvailablePoints(statsRoot)
 	return 0
 end
 
--- Sets the exact stat amount in all custom amount TextBoxes inside the Stats UI
+-- Sets custom amount TextBox
 local function setCustomAmountBackground(statsRoot, amount)
 	local targetInt = math.max(1, math.floor(amount))
 	local targetStr = tostring(targetInt)
@@ -296,12 +288,11 @@ local function setCustomAmountBackground(statsRoot, amount)
 			if updated then break end
 		end
 	end
-
 	task.wait(0.08)
 	return updated
 end
 
--- Reads a stat row ("Shadow Agility", "Shadow Reach", "Player Experience")
+-- Reads stat row data
 local function getStatRowData(statTitle, statsRoot)
 	local titleLabel = findBestLabel(statTitle, statsRoot)
 	if not titleLabel then return nil end
@@ -352,7 +343,6 @@ local function getStatRowData(statTitle, statsRoot)
 	return nil
 end
 
--- Allocates `amount` points to the target stat row in a single background trigger
 local function allocateStatBackground(statsRoot, stageName, amount, upgradeTarget, summary)
 	setCustomAmountBackground(statsRoot, amount)
 	logStatus(stageName .. " (+" .. tostring(amount) .. ")", summary)
@@ -360,25 +350,25 @@ local function allocateStatBackground(statsRoot, stageName, amount, upgradeTarge
 	task.wait(ACTION_DELAY)
 end
 
--- Main Windowless Automation Loop Step
+-- Main Loop Step
 local function stepBackgroundAutomation()
 	if busy then return end
 	busy = true
 
 	local statsRoot = getStatsRoot()
 	if not statsRoot then
-		logStatus("Waiting for Game UI", "Stats hierarchy not loaded yet")
+		logStatus("Waiting for Game UI", "Stats hierarchy not found yet")
 		busy = false
 		return
 	end
 
-	-- 1. Check if the "REBIRTH?" confirmation popup is open and click its "YES" button
+	-- 1. Check if "REBIRTH?" confirmation popup is open and click YES
 	local yesTarget = findRebirthConfirmYesButton()
 	if yesTarget then
-		logStatus("Confirming Rebirth (Bg)", "Triggering YES on REBIRTH? popup...")
+		logStatus("Confirming Rebirth", "Clicking YES on popup...")
 		triggerElementBackground(yesTarget)
 		rebirthCount += 1
-		task.wait(0.8)
+		task.wait(1.0)
 		busy = false
 		return
 	end
@@ -389,31 +379,31 @@ local function stepBackgroundAutomation()
 	local rebirthReady = rebirthLabel and isLocallyVisible(rebirthLabel, statsRoot)
 
 	if (hudIsMax or rebirthReady) and rebirthLabel then
-		logStatus("Max Level Reached!", "Triggering REBIRTH in background...")
+		logStatus("Max Level Reached!", "Triggering REBIRTH...")
 		triggerElementBackground(rebirthLabel)
-		task.wait(0.35)
+		task.wait(0.4)
 
-		-- Immediately check for the newly opened YES button and trigger it
+		-- Click YES on the resulting confirmation popup
 		local confirmYes = findRebirthConfirmYesButton()
 		if confirmYes then
-			logStatus("Rebirth Confirmed!", "Triggering YES on REBIRTH? popup...")
+			logStatus("Rebirth Confirmed!", "Clicking YES on popup...")
 			triggerElementBackground(confirmYes)
 			rebirthCount += 1
-			task.wait(0.8)
+			task.wait(1.0)
 		end
 
 		busy = false
 		return
 	end
 
-	-- 3. Read current Points and Stat Levels in the background
+	-- 3. Read current Points and Stat Levels
 	local points = getAvailablePoints(statsRoot)
 	local agiCur, agiMax, agiTarget, agiMaxed = getStatRowData("Shadow Agility", statsRoot)
 	local reachCur, reachMax, reachTarget, reachMaxed = getStatRowData("Shadow Reach", statsRoot)
 	local expCur, expMax, expTarget, expMaxed = getStatRowData("Player Experience", statsRoot)
 
 	if not (agiCur and reachCur and expCur) then
-		logStatus("Reading Background Stats...", hudText or "Waiting for stat rows...")
+		logStatus("Reading Stats...", hudText or "Waiting for stat rows...")
 		busy = false
 		return
 	end
@@ -423,14 +413,13 @@ local function stepBackgroundAutomation()
 		points, agiCur, reachCur, expCur, expMax
 	)
 
-	-- Wait passively if there are no unspent points
 	if points <= 0 then
 		logStatus("Monitoring in Background", summary)
 		busy = false
 		return
 	end
 
-	-- Priority 1: Add 200 stats to Shadow Agility in 1 click
+	-- Step 1: Shadow Agility -> 200
 	local agiGoal = math.min(AGILITY_TARGET, agiMax)
 	if agiCur < agiGoal and not agiMaxed and agiTarget then
 		local toAdd = math.min(points, agiGoal - agiCur)
@@ -439,7 +428,7 @@ local function stepBackgroundAutomation()
 		return
 	end
 
-	-- Priority 2: Add 800 stats to Shadow Reach (Shadow Range) in 1 click
+	-- Step 2: Shadow Reach -> 800
 	local reachInitialGoal = math.min(INITIAL_RANGE_TARGET, reachMax)
 	if reachCur < reachInitialGoal and not reachMaxed and reachTarget then
 		local toAdd = math.min(points, reachInitialGoal - reachCur)
@@ -448,7 +437,7 @@ local function stepBackgroundAutomation()
 		return
 	end
 
-	-- Priority 3: Add all remaining points to Player Experience until MAX in 1 click
+	-- Step 3: Player Experience -> MAX
 	if not expMaxed and expCur < expMax and expTarget then
 		local toAdd = math.min(points, expMax - expCur)
 		allocateStatBackground(statsRoot, "Step 3: Maxing Player Exp", toAdd, expTarget, summary)
@@ -456,7 +445,7 @@ local function stepBackgroundAutomation()
 		return
 	end
 
-	-- Priority 4: Add excess points earned while leveling up to Shadow Reach in 1 click
+	-- Step 4: Excess -> Shadow Reach
 	if not reachMaxed and reachCur < reachMax and reachTarget then
 		local toAdd = math.min(points, reachMax - reachCur)
 		allocateStatBackground(statsRoot, "Step 4: Excess -> Shadow Reach", toAdd, reachTarget, summary)
