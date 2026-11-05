@@ -1,5 +1,5 @@
 -- ====================================================================
--- SOLO LEVELING / ANIME SHADOW: 100% BACKGROUND AUTO-REBIRTH (V18 - FINAL)
+-- SOLO LEVELING / ANIME SHADOW: 100% BACKGROUND AUTO-REBIRTH (V19)
 -- ====================================================================
 
 local Players = game:GetService("Players")
@@ -8,7 +8,7 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- Remove prior UI instances
-for _, name in ipairs({"NS_Rebirth", "AutoRebirthGui", "SoloRebirth_V13", "SoloRebirth_V14", "SoloRebirth_V15", "SoloRebirth_V16", "SoloRebirth_V17", "SoloRebirth_V18"}) do
+for _, name in ipairs({"NS_Rebirth", "AutoRebirthGui", "SoloRebirth_V13", "SoloRebirth_V14", "SoloRebirth_V15", "SoloRebirth_V16", "SoloRebirth_V17", "SoloRebirth_V18", "SoloRebirth_V19"}) do
     local old = playerGui:FindFirstChild(name)
     if old then pcall(function() old:Destroy() end) end
 end
@@ -52,7 +52,7 @@ local function getButtonText(btn)
 end
 
 local function diagLog(msg)
-    print(string.format("[SoloRebirth-V18] %s", tostring(msg)))
+    print(string.format("[SoloRebirth-V19] %s", tostring(msg)))
 end
 
 -- --------------------------------------------------------------------
@@ -111,6 +111,8 @@ local function fireMultiSignalBackground(btn)
                         if c.Function then task.spawn(c.Function); totalFired = totalFired + 1
                         elseif c.Fire then c:Fire(); totalFired = totalFired + 1 end
                     end
+                end)
+                pcall(function()
                     for _, c in ipairs(getconnections(target.MouseButton1Up)) do
                         if c.Function then task.spawn(c.Function); totalFired = totalFired + 1
                         elseif c.Fire then c:Fire(); totalFired = totalFired + 1 end
@@ -161,12 +163,12 @@ local function getStatsRoot()
     end
 
     local direct = playerGui:FindFirstChild("UI_Stats", true)
-    if direct and direct.Name == "UI_Stats" and not direct:FindFirstAncestor("SoloRebirth_V18") then
+    if direct and direct.Name == "UI_Stats" and not direct:FindFirstAncestor("SoloRebirth_V19") then
         return direct
     end
 
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if not desc:FindFirstAncestor("SoloRebirth_V18") and desc:IsA("TextLabel") and desc.Text then
+        if not desc:FindFirstAncestor("SoloRebirth_V19") and desc:IsA("TextLabel") and desc.Text then
             local clean = cleanAlpha(desc.Text)
             if string.find(clean, "SPENDYOURPOINTS") then
                 local p = desc.Parent
@@ -184,9 +186,9 @@ end
 
 local function isPlayerAtMaxLevel()
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if not desc:FindFirstAncestor("SoloRebirth_V18") and desc:IsA("TextLabel") and desc.Text then
+        if not desc:FindFirstAncestor("SoloRebirth_V19") and not desc:FindFirstAncestor("UI_Stats") and desc:IsA("TextLabel") and desc.Text then
             local raw = desc.Text
-            if string.find(raw, "%(MAX%)") or (string.find(string.upper(raw), "MAX") and string.find(string.upper(raw), "LEVEL")) then
+            if string.find(raw, "%(MAX%)") then
                 return true, raw
             end
         end
@@ -293,12 +295,11 @@ local function findRebirthConfirmYesButton(statsRoot)
 end
 
 -- --------------------------------------------------------------------
--- 4. POINT READING & STAT ALLOCATION
+-- 4. POINT READING & ACCURATE STAT ROW PARSING
 -- --------------------------------------------------------------------
 local function getAvailablePoints(statsRoot)
     if not statsRoot then return 0 end
 
-    -- Direct extraction from sa_side diamond badge
     local saCols = statsRoot:FindFirstChild("sa_cols", true)
     local saSide = saCols and saCols:FindFirstChild("sa_side", true)
     if saSide then
@@ -367,49 +368,68 @@ local function setCustomAmountBackground(statsRoot, amount)
     end
 end
 
+-- Strictly locates the row container containing the title, Lv label, and upgrade button
 local function getStatRow(statsRoot, statName)
     if not statsRoot then return nil end
     local targetClean = cleanAlpha(statName)
 
     for _, desc in ipairs(statsRoot:GetDescendants()) do
-        if desc:IsA("TextLabel") and desc.Text then
-            local clean = cleanAlpha(desc.Text)
-            if string.find(clean, targetClean, 1, true) then
-                local row = desc.Parent
-                while row and row ~= statsRoot and row.Parent ~= statsRoot do
-                    row = row.Parent
-                end
-                if not row then row = desc.Parent end
+        if desc:IsA("TextLabel") and desc.Text and cleanAlpha(desc.Text) == targetClean then
+            local curr = desc.Parent
+            local matchedRow = nil
 
-                local rowText = ""
-                for _, child in ipairs(row:GetDescendants()) do
-                    if child:IsA("TextLabel") and child.Text then
-                        rowText = rowText .. " " .. child.Text
+            for _ = 1, 4 do
+                if not curr or curr == statsRoot then break end
+                local hasLv = false
+                local hasBtn = false
+
+                for _, child in ipairs(curr:GetDescendants()) do
+                    if child:IsA("TextLabel") and child.Text and string.find(child.Text, "Lv") then
+                        hasLv = true
                     end
-                end
-
-                local cur, mx = string.match(string.gsub(rowText, ",", ""), "Lv%s*(%d+)%s*/%s*(%d+)")
-                local isMax = string.find(cleanAlpha(rowText), "MAX") ~= nil
-
-                local addBtn = nil
-                for _, b in ipairs(row:GetDescendants()) do
-                    if b:IsA("GuiButton") then
-                        local bt = getButtonText(b)
-                        local bn = string.lower(b.Name)
-                        if string.find(bt, "+") or string.find(bn, "add") or string.find(bn, "upg") or bt == "MAX" or bn == "nui_btn" then
-                            addBtn = b
-                            break
-                        end
+                    if child:IsA("GuiButton") then
+                        hasBtn = true
                     end
+                    if hasLv and hasBtn then break end
                 end
 
-                return {
-                    current = tonumber(cur) or 0,
-                    max = tonumber(mx) or 3225,
-                    isMax = isMax or (tonumber(cur) ~= nil and tonumber(mx) ~= nil and tonumber(cur) >= tonumber(mx)),
-                    button = addBtn
-                }
+                if hasLv and hasBtn then
+                    matchedRow = curr
+                    break
+                end
+                curr = curr.Parent
             end
+
+            if not matchedRow then matchedRow = desc.Parent end
+
+            local rowText = ""
+            local addBtn = nil
+            for _, child in ipairs(matchedRow:GetDescendants()) do
+                if child:IsA("TextLabel") and child.Text then
+                    rowText = rowText .. " " .. child.Text
+                end
+                if child:IsA("GuiButton") and not addBtn then
+                    local bt = getButtonText(child)
+                    local bn = string.lower(child.Name)
+                    if string.find(bt, "+") or string.find(bn, "add") or string.find(bn, "upg") or bt == "MAX" or bn == "nui_btn" then
+                        addBtn = child
+                    end
+                end
+            end
+
+            local cur, mx = string.match(string.gsub(rowText, ",", ""), "Lv%s*(%d+)%s*/%s*(%d+)")
+            local currentVal = tonumber(cur) or 0
+            local maxVal     = tonumber(mx) or 3225
+
+            local btnText = getButtonText(addBtn)
+            local isMaxed = (btnText == "MAX") or (currentVal >= maxVal and currentVal > 0)
+
+            return {
+                current = currentVal,
+                max = maxVal,
+                isMax = isMaxed,
+                button = addBtn
+            }
         end
     end
     return nil
@@ -429,7 +449,6 @@ local function executeBackgroundRebirth(statsRoot, updateStatus)
     if not yesBtn then
         local rebirthBtn = findRebirthButton(statsRoot)
         if not rebirthBtn then
-            diagLog("Rebirth button not found in UI_Stats.")
             return false
         end
 
@@ -475,7 +494,7 @@ end
 -- 6. CONTROL UI
 -- --------------------------------------------------------------------
 local gui = Instance.new("ScreenGui")
-gui.Name = "SoloRebirth_V18"
+gui.Name = "SoloRebirth_V19"
 gui.ResetOnSpawn = false
 gui.DisplayOrder = 100
 gui.Parent = playerGui
@@ -497,7 +516,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -20, 0, 24)
 title.Position = UDim2.fromOffset(10, 8)
 title.BackgroundTransparency = 1
-title.Text = "⚡ Background Auto-Rebirth (V18 - Final)"
+title.Text = "⚡ Background Auto-Rebirth (V19 - Verified)"
 title.TextColor3 = Color3.fromRGB(255, 215, 0)
 title.TextSize = 13
 title.Font = Enum.Font.GothamBold
@@ -525,7 +544,7 @@ statsLabel.TextColor3 = Color3.fromRGB(88, 166, 255)
 statsLabel.TextSize = 11
 statsLabel.Font = Enum.Font.GothamMedium
 statsLabel.TextXAlignment = Enum.TextXAlignment.Left
-statsLabel.Text = " Points: - | Agility: -/200\n Reach: -/800 | Exp: -/MAX"
+statsLabel.Text = " Points: - | Agility: -/200\\n Reach: -/800 | Exp: -/MAX"
 statsLabel.Parent = frame
 
 local statCorner = Instance.new("UICorner")
@@ -560,7 +579,7 @@ end
 
 local function updateStatsReadout(pts, agi, rch, exp)
     statsLabel.Text = string.format(
-        " Points: %d | Agility: %d/200\n Reach: %d/800 | Exp: %s",
+        " Points: %d | Agility: %d/200\\n Reach: %d/800 | Exp: %s",
         pts or 0,
         agi and agi.current or 0,
         rch and rch.current or 0,
@@ -602,16 +621,33 @@ local function runBackgroundCycle()
 
         -- 3. Allocate Points in Background
         if points > 0 then
-            diagLog(string.format("Allocating %d unspent points...", points))
+            diagLog(string.format("Allocating %d points | Agi: %d/200, Reach: %d/800, Exp: %d/%d",
+                points, agi and agi.current or 0, rch and rch.current or 0, exp and exp.current or 0, exp and exp.max or 3225))
 
             local function spendOnStatBackground(statTitle, targetLevel)
                 local row = getStatRow(statsRoot, statTitle)
-                if not row or row.isMax or row.current >= targetLevel or not row.button then return end
+                if not row then
+                    diagLog(string.format("Stat row '%s' not found.", statTitle))
+                    return
+                end
+                if row.isMax then
+                    diagLog(string.format("Stat '%s' is already MAX.", statTitle))
+                    return
+                end
+                if row.current >= targetLevel then
+                    diagLog(string.format("Stat '%s' already at target (%d >= %d).", statTitle, row.current, targetLevel))
+                    return
+                end
+                if not row.button then
+                    diagLog(string.format("Upgrade button for '%s' not found.", statTitle))
+                    return
+                end
 
                 local needed = targetLevel - row.current
                 local toSpend = math.min(points, needed)
                 if toSpend <= 0 then return end
 
+                diagLog(string.format("Setting custom amount: %d for %s (needed %d)", toSpend, statTitle, needed))
                 updateStatus(string.format("Spending %d on %s...", toSpend, statTitle), Color3.fromRGB(46, 204, 113))
                 setCustomAmountBackground(statsRoot, toSpend)
 
@@ -624,11 +660,18 @@ local function runBackgroundCycle()
                     task.wait(0.06)
 
                     local newPoints = getAvailablePoints(statsRoot)
-                    if newPoints == points then break end
+                    if newPoints == points then
+                        task.wait(0.1)
+                        fireMultiSignalBackground(freshRow.button)
+                        newPoints = getAvailablePoints(statsRoot)
+                        if newPoints == points then break end
+                    end
+
                     local spent = points - newPoints
                     needed = needed - spent
                     points = newPoints
                     attempts = attempts + 1
+                    diagLog(string.format("Spent %d on %s | Remaining points: %d", spent, statTitle, points))
                 end
                 updateStatsReadout(points, getStatRow(statsRoot, "Shadow Agility"), getStatRow(statsRoot, "Shadow Reach"), getStatRow(statsRoot, "Player Experience"))
             end
@@ -717,4 +760,4 @@ task.spawn(function()
     end
 end)
 
-print("[SoloRebirth V18] 100% Background Auto-Rebirth & Stat Allocation Initialized!")
+print("[SoloRebirth V19] 100% Background Auto-Rebirth & Stat Allocation Initialized!")
