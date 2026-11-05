@@ -1,5 +1,5 @@
 -- ====================================================================
--- SOLO LEVELING / ANIME SHADOW: 100% BACKGROUND AUTO-REBIRTH (V17 - FIXED)
+-- SOLO LEVELING / ANIME SHADOW: 100% BACKGROUND AUTO-REBIRTH (V18 - FINAL)
 -- ====================================================================
 
 local Players = game:GetService("Players")
@@ -7,8 +7,8 @@ local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- Clean up any prior running UI instances
-for _, name in ipairs({"NS_Rebirth", "AutoRebirthGui", "SoloRebirth_V13", "SoloRebirth_V14", "SoloRebirth_V15", "SoloRebirth_V16", "SoloRebirth_V17"}) do
+-- Remove prior UI instances
+for _, name in ipairs({"NS_Rebirth", "AutoRebirthGui", "SoloRebirth_V13", "SoloRebirth_V14", "SoloRebirth_V15", "SoloRebirth_V16", "SoloRebirth_V17", "SoloRebirth_V18"}) do
     local old = playerGui:FindFirstChild(name)
     if old then pcall(function() old:Destroy() end) end
 end
@@ -21,7 +21,6 @@ local TARGET_REACH   = 800
 local isRunning = true
 local isProcessing = false
 local rebirthCount = 0
-local rebirthAttempts = 0
 local lastRebirthTime = 0
 
 -- --------------------------------------------------------------------
@@ -39,7 +38,6 @@ local function cleanUpper(str)
     return string.upper(string.match(noTags, "^%s*(.-)%s*$") or "")
 end
 
--- Safely retrieves text from ANY button type (ImageButton or TextButton)
 local function getButtonText(btn)
     if not btn then return "" end
     if btn:IsA("TextButton") then
@@ -54,7 +52,7 @@ local function getButtonText(btn)
 end
 
 local function diagLog(msg)
-    print(string.format("[SoloRebirth-V17] %s", tostring(msg)))
+    print(string.format("[SoloRebirth-V18] %s", tostring(msg)))
 end
 
 -- --------------------------------------------------------------------
@@ -143,12 +141,11 @@ local function fireMultiSignalBackground(btn)
         end
     end
 
-    diagLog(string.format("Dispatched multi-signal to '%s' (%s) | Total callbacks invoked: %d", btn.Name, btn.ClassName, totalFired))
     return totalFired > 0
 end
 
 -- --------------------------------------------------------------------
--- 3. UI LOCATORS IN MEMORY (STRICT ISOLATION)
+-- 3. UI LOCATORS IN MEMORY
 -- --------------------------------------------------------------------
 local function getStatsRoot()
     local disableFolder = playerGui:FindFirstChild("__Disable")
@@ -164,12 +161,12 @@ local function getStatsRoot()
     end
 
     local direct = playerGui:FindFirstChild("UI_Stats", true)
-    if direct and direct.Name == "UI_Stats" and not direct:FindFirstAncestor("SoloRebirth_V17") then
+    if direct and direct.Name == "UI_Stats" and not direct:FindFirstAncestor("SoloRebirth_V18") then
         return direct
     end
 
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if not desc:FindFirstAncestor("SoloRebirth_V17") and desc:IsA("TextLabel") and desc.Text then
+        if not desc:FindFirstAncestor("SoloRebirth_V18") and desc:IsA("TextLabel") and desc.Text then
             local clean = cleanAlpha(desc.Text)
             if string.find(clean, "SPENDYOURPOINTS") then
                 local p = desc.Parent
@@ -187,7 +184,7 @@ end
 
 local function isPlayerAtMaxLevel()
     for _, desc in ipairs(playerGui:GetDescendants()) do
-        if not desc:FindFirstAncestor("SoloRebirth_V17") and desc:IsA("TextLabel") and desc.Text then
+        if not desc:FindFirstAncestor("SoloRebirth_V18") and desc:IsA("TextLabel") and desc.Text then
             local raw = desc.Text
             if string.find(raw, "%(MAX%)") or (string.find(string.upper(raw), "MAX") and string.find(string.upper(raw), "LEVEL")) then
                 return true, raw
@@ -197,7 +194,6 @@ local function isPlayerAtMaxLevel()
     return false, nil
 end
 
--- Directly locates the REBIRTH button inside UI_Stats (using sa_side path first)
 local function findRebirthButton(statsRoot)
     if not statsRoot then return nil end
 
@@ -205,75 +201,91 @@ local function findRebirthButton(statsRoot)
     if saCols then
         local saSide = saCols:FindFirstChild("sa_side", true)
         if saSide then
+            local saRebirth = saSide:FindFirstChild("sa_rebirth", true)
+            if saRebirth then
+                local btn = saRebirth:IsA("GuiButton") and saRebirth or saRebirth:FindFirstChildWhichIsA("GuiButton", true)
+                if btn then return btn end
+            end
+
             for _, child in ipairs(saSide:GetChildren()) do
-                local n = string.lower(child.Name)
-                if string.find(n, "rebirth") and not string.find(n, "reset") then
-                    local btn = child:IsA("GuiButton") and child or child:FindFirstChildWhichIsA("GuiButton", true)
-                    if btn then return btn end
+                if child:IsA("GuiButton") and not string.find(string.lower(child.Name), "reset") then
+                    local txt = getButtonText(child)
+                    if cleanAlpha(txt) == "REBIRTH" then return child end
+                end
+                for _, b in ipairs(child:GetChildren()) do
+                    if b:IsA("GuiButton") and not string.find(string.lower(child.Name), "reset") then
+                        local txt = getButtonText(b)
+                        if cleanAlpha(txt) == "REBIRTH" then return b end
+                    end
                 end
             end
         end
     end
 
     for _, desc in ipairs(statsRoot:GetDescendants()) do
-        if desc:IsA("TextLabel") and desc.Text then
-            if cleanAlpha(desc.Text) == "REBIRTH" then
-                local btn = desc:FindFirstAncestorWhichIsA("GuiButton") or (desc.Parent and desc.Parent:FindFirstChildWhichIsA("GuiButton"))
-                if btn then return btn end
-            end
+        if desc:IsA("TextLabel") and desc.Text and cleanAlpha(desc.Text) == "REBIRTH" then
+            local btn = desc:FindFirstAncestorWhichIsA("GuiButton") or (desc.Parent and desc.Parent:FindFirstChildWhichIsA("GuiButton"))
+            if btn then return btn end
         end
     end
     return nil
 end
 
--- Strictly locates the 'YES' button of the 'REBIRTH?' confirmation popup
--- EXPLICITLY REJECTS UI_AfkTp, UI_Daily, UI_Inventory, and any unrelated window!
 local function findRebirthConfirmYesButton(statsRoot)
-    local searchContainers = {}
-    if statsRoot then table.insert(searchContainers, statsRoot) end
+    if not statsRoot then return nil end
 
-    for _, child in ipairs(playerGui:GetChildren()) do
-        local n = string.lower(child.Name)
-        if n ~= "__disable" and n ~= "hud" and n ~= "solorebirth_v17" and not string.find(n, "afk") and not string.find(n, "daily") and not string.find(n, "inventory") then
-            table.insert(searchContainers, child)
-        end
-    end
-
-    for _, root in ipairs(searchContainers) do
-        for _, desc in ipairs(root:GetDescendants()) do
-            if desc:FindFirstAncestor("UI_AfkTp") or desc:FindFirstAncestor("UI_Daily") or desc:FindFirstAncestor("UI_Inventory") or desc:FindFirstAncestor("SoloRebirth_V17") then
-                continue
-            end
-
-            local rawText = (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text or ""
-            local clean = cleanAlpha(rawText)
-
-            if clean == "YES" or clean == "CONFIRM" then
-                local container = desc.Parent
-                local isRebirthDialog = false
-
-                for _ = 1, 6 do
-                    if not container or container == playerGui then break end
-                    for _, sib in ipairs(container:GetDescendants()) do
-                        if (sib:IsA("TextLabel") or sib:IsA("TextButton")) and sib.Text then
-                            local sibClean = cleanAlpha(sib.Text)
-                            if string.find(sibClean, "REBIRTH") or (string.find(sibClean, "RESET") and not string.find(sibClean, "STATS")) then
-                                isRebirthDialog = true
-                                break
-                            end
-                        end
-                    end
-                    if isRebirthDialog then break end
-                    container = container.Parent
-                end
-
-                if isRebirthDialog then
+    local nuiRebirth = statsRoot:FindFirstChild("NUI_Rebirth", true)
+    if nuiRebirth then
+        for _, desc in ipairs(nuiRebirth:GetDescendants()) do
+            if desc:IsA("TextLabel") and desc.Text then
+                local clean = cleanAlpha(desc.Text)
+                if clean == "YES" or clean == "CONFIRM" then
                     local btn = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
                     if btn and not string.find(string.lower(btn.Name), "no") then
                         return btn
                     end
-                    return desc
                 end
+            end
+        end
+        for _, desc in ipairs(nuiRebirth:GetChildren()) do
+            if desc:IsA("GuiButton") and not string.find(string.lower(desc.Name), "no") then
+                return desc
+            end
+            local childBtn = desc:FindFirstChildWhichIsA("GuiButton")
+            if childBtn and not string.find(string.lower(childBtn.Name), "no") then
+                return childBtn
+            end
+        end
+    end
+
+    for _, desc in ipairs(statsRoot:GetDescendants()) do
+        local rawText = (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text or ""
+        local clean = cleanAlpha(rawText)
+
+        if clean == "YES" or clean == "CONFIRM" then
+            local container = desc.Parent
+            local isRebirthDialog = false
+            for _ = 1, 6 do
+                if not container or container == statsRoot then break end
+                for _, sib in ipairs(container:GetDescendants()) do
+                    if (sib:IsA("TextLabel") or sib:IsA("TextButton")) and sib.Text then
+                        local sibClean = cleanAlpha(sib.Text)
+                        if string.find(sibClean, "REBIRTH") or (string.find(sibClean, "RESET") and not string.find(sibClean, "STATS")) then
+                            isRebirthDialog = true
+                            break
+                        end
+                    end
+                end
+                if isRebirthDialog then break end
+                container = container.Parent
+            end
+
+            if isRebirthDialog then
+                local btn = desc:IsA("GuiButton") and desc or desc:FindFirstAncestorWhichIsA("GuiButton")
+                if btn and not string.find(string.lower(btn.Name), "no") then
+                    return btn
+                end
+                return desc
             end
         end
     end
@@ -285,24 +297,43 @@ end
 -- --------------------------------------------------------------------
 local function getAvailablePoints(statsRoot)
     if not statsRoot then return 0 end
-    for _, desc in ipairs(statsRoot:GetDescendants()) do
-        if desc:IsA("TextLabel") and desc.Text then
-            local clean = cleanAlpha(desc.Text)
-            if (string.find(clean, "POINTS") or string.find(clean, "SPEND")) and not string.find(clean, "EARNED") and not string.find(clean, "SPENT") then
-                local s = string.gsub(desc.Text, "[,%s]", "")
-                local num = tonumber(string.match(s, "(%d+)"))
-                if num and num > 0 and num < 10000000 then return num end
+
+    -- Direct extraction from sa_side diamond badge
+    local saCols = statsRoot:FindFirstChild("sa_cols", true)
+    local saSide = saCols and saCols:FindFirstChild("sa_side", true)
+    if saSide then
+        for _, desc in ipairs(saSide:GetDescendants()) do
+            if desc:IsA("TextLabel") and desc.Text then
+                local clean = string.gsub(desc.Text, "[,%s]", "")
+                if string.match(desc.Text, "^%s*[%d,]+%s*$") then
+                    local num = tonumber(clean)
+                    if num and num > 0 and num < 10000000 then
+                        return num
+                    end
+                end
             end
         end
     end
 
     for _, desc in ipairs(statsRoot:GetDescendants()) do
         if desc:IsA("TextLabel") and desc.Text then
-            local s = string.gsub(desc.Text, "[,%s]", "")
-            local num = tonumber(string.match(s, "^(%d+)$"))
-            if num and num > 0 and num < 10000000 then return num end
+            local clean = string.gsub(desc.Text, "[,%s]", "")
+            if string.match(desc.Text, "^%s*[%d,]+%s*$") then
+                local num = tonumber(clean)
+                if num and num > 0 and num < 10000000 then
+                    local p = desc.Parent
+                    if p then
+                        for _, sib in ipairs(p:GetChildren()) do
+                            if sib:IsA("TextLabel") and sib.Text and string.find(cleanAlpha(sib.Text), "POINTS") then
+                                return num
+                            end
+                        end
+                    end
+                end
+            end
         end
     end
+
     return 0
 end
 
@@ -365,7 +396,7 @@ local function getStatRow(statsRoot, statName)
                     if b:IsA("GuiButton") then
                         local bt = getButtonText(b)
                         local bn = string.lower(b.Name)
-                        if string.find(bt, "+") or string.find(bn, "add") or string.find(bn, "upg") or bt == "MAX" then
+                        if string.find(bt, "+") or string.find(bn, "add") or string.find(bn, "upg") or bt == "MAX" or bn == "nui_btn" then
                             addBtn = b
                             break
                         end
@@ -385,7 +416,7 @@ local function getStatRow(statsRoot, statName)
 end
 
 -- --------------------------------------------------------------------
--- 5. REBIRTH WORKFLOW (TRIGGER REBIRTH FIRST -> CONFIRM YES)
+-- 5. REBIRTH WORKFLOW (STRICTLY GATED TO MAX LEVEL)
 -- --------------------------------------------------------------------
 local function executeBackgroundRebirth(statsRoot, updateStatus)
     local now = os.clock()
@@ -402,7 +433,7 @@ local function executeBackgroundRebirth(statsRoot, updateStatus)
             return false
         end
 
-        diagLog("Found REBIRTH button: " .. rebirthBtn:GetFullName() .. " (" .. rebirthBtn.ClassName .. ")")
+        diagLog("Firing REBIRTH in UI_Stats: " .. rebirthBtn:GetFullName())
         updateStatus("Firing REBIRTH in UI_Stats...", Color3.fromRGB(241, 196, 15))
         fireMultiSignalBackground(rebirthBtn)
         lastRebirthTime = now
@@ -415,34 +446,23 @@ local function executeBackgroundRebirth(statsRoot, updateStatus)
     end
 
     if yesBtn then
-        diagLog("Found Valid Rebirth YES button: " .. yesBtn:GetFullName() .. " (" .. yesBtn.ClassName .. ")")
+        diagLog("Confirming YES on: " .. yesBtn:GetFullName())
         updateStatus("Confirming YES (Rebirth Modal)...", Color3.fromRGB(46, 204, 113))
         task.wait(0.1)
 
         fireMultiSignalBackground(yesBtn)
-        rebirthAttempts = rebirthAttempts + 1
         lastRebirthTime = os.clock()
 
-        for _ = 1, 12 do
+        for _ = 1, 15 do
             task.wait(0.1)
             local atMax = isPlayerAtMaxLevel()
-            local stillYes = findRebirthConfirmYesButton(statsRoot)
-            if not atMax or not stillYes then
+            if not atMax then
                 rebirthCount = rebirthCount + 1
-                rebirthAttempts = 0
-                updateStatus(string.format("Rebirth #%d Confirmed!", rebirthCount), Color3.fromRGB(46, 204, 113))
-                diagLog(string.format("Rebirth #%d verified successfully!", rebirthCount))
-                task.wait(0.5)
+                updateStatus(string.format("Rebirth #%d Confirmed! Level Reset.", rebirthCount), Color3.fromRGB(46, 204, 113))
+                diagLog(string.format("Rebirth #%d verified! Level reset to 1.", rebirthCount))
+                task.wait(0.4)
                 return true
             end
-        end
-
-        if rebirthAttempts >= 3 then
-            updateStatus(string.format("Rebirth pending server response (Attempt %d/3)...", rebirthAttempts), Color3.fromRGB(230, 126, 34))
-            diagLog("3 Rebirth confirmation attempts sent. Waiting for server sync.")
-            lastRebirthTime = os.clock() + 4.0
-            rebirthAttempts = 0
-            return false
         end
 
         return false
@@ -455,7 +475,7 @@ end
 -- 6. CONTROL UI
 -- --------------------------------------------------------------------
 local gui = Instance.new("ScreenGui")
-gui.Name = "SoloRebirth_V17"
+gui.Name = "SoloRebirth_V18"
 gui.ResetOnSpawn = false
 gui.DisplayOrder = 100
 gui.Parent = playerGui
@@ -477,7 +497,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -20, 0, 24)
 title.Position = UDim2.fromOffset(10, 8)
 title.BackgroundTransparency = 1
-title.Text = "⚡ Background Auto-Rebirth (V17 - Fixed)"
+title.Text = "⚡ Background Auto-Rebirth (V18 - Final)"
 title.TextColor3 = Color3.fromRGB(255, 215, 0)
 title.TextSize = 13
 title.Font = Enum.Font.GothamBold
@@ -564,17 +584,26 @@ local function runBackgroundCycle()
 
         local atMax, hudText = isPlayerAtMaxLevel()
 
-        if atMax or findRebirthConfirmYesButton(statsRoot) then
-            executeBackgroundRebirth(statsRoot, updateStatus)
+        -- 1. ONLY EXECUTE REBIRTH IF ACTUALLY AT MAX LEVEL!
+        if atMax then
+            local rebirthed = executeBackgroundRebirth(statsRoot, updateStatus)
+            if rebirthed then
+                task.wait(0.5)
+                atMax = false
+            end
         end
 
+        -- 2. Read Points & Stat Levels in Memory
         local points = getAvailablePoints(statsRoot)
         local agi = getStatRow(statsRoot, "Shadow Agility")
         local rch = getStatRow(statsRoot, "Shadow Reach")
         local exp = getStatRow(statsRoot, "Player Experience")
         updateStatsReadout(points, agi, rch, exp)
 
+        -- 3. Allocate Points in Background
         if points > 0 then
+            diagLog(string.format("Allocating %d unspent points...", points))
+
             local function spendOnStatBackground(statTitle, targetLevel)
                 local row = getStatRow(statsRoot, statTitle)
                 if not row or row.isMax or row.current >= targetLevel or not row.button then return end
@@ -604,14 +633,19 @@ local function runBackgroundCycle()
                 updateStatsReadout(points, getStatRow(statsRoot, "Shadow Agility"), getStatRow(statsRoot, "Shadow Reach"), getStatRow(statsRoot, "Player Experience"))
             end
 
+            -- Priority 1: Shadow Agility -> 200
             spendOnStatBackground("Shadow Agility", TARGET_AGILITY)
+
+            -- Priority 2: Shadow Reach -> 800
             spendOnStatBackground("Shadow Reach", TARGET_REACH)
 
+            -- Priority 3: Player Experience -> MAX
             local freshExp = getStatRow(statsRoot, "Player Experience")
             if freshExp and not freshExp.isMax then
                 spendOnStatBackground("Player Experience", freshExp.max)
             end
 
+            -- Priority 4: Overflow into Shadow Reach
             freshExp = getStatRow(statsRoot, "Player Experience")
             if freshExp and freshExp.isMax and points > 0 then
                 local freshRch = getStatRow(statsRoot, "Shadow Reach")
@@ -633,8 +667,9 @@ local function runBackgroundCycle()
                     end
                 end
             end
+            updateStatus("Active (Points Allocated)", Color3.fromRGB(46, 204, 113))
         else
-            if not atMax and not findRebirthConfirmYesButton(statsRoot) then
+            if not atMax then
                 updateStatus("Active (Background Monitoring)", Color3.fromRGB(230, 230, 230))
             end
         end
@@ -682,4 +717,4 @@ task.spawn(function()
     end
 end)
 
-print("[SoloRebirth V17] Background Auto-Rebirth (Fixed) Loaded Successfully!")
+print("[SoloRebirth V18] 100% Background Auto-Rebirth & Stat Allocation Initialized!")
